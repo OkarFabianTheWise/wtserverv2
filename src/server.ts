@@ -1,0 +1,53 @@
+import express from 'express';
+import cors from 'cors';
+import { generateVideo, generateScrollingScriptVideo } from './videoGenerator.ts';
+import { generateSpeech } from './textToSpeech.ts';
+import { enhanceScript } from './codeAnalyzer.ts';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import videosStatusRoute from './videosStatusRoute.ts';
+import generateRoute from './generateRoute.ts';
+
+// Load environment variables from root .env file
+dotenv.config({ path: path.join(process.cwd(), '.env') });
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = 3001;
+
+app.use(cors());
+app.use(express.json());
+app.use('/output', express.static(path.join(__dirname, 'output')));
+
+// Mount API routers under `/api` so frontend can call `/api/generate` and `/api/videos/status/:id`
+app.use('/api', videosStatusRoute);
+app.use('/api', generateRoute);
+
+// (Video generation endpoint moved to generateRoute.ts)
+
+// Video serving endpoint
+app.get('/api/videos/:transactionSignature', (req, res) => {
+  const { transactionSignature } = req.params;
+  const videoPath = path.join(__dirname, 'output', `${transactionSignature}.mp4`);
+
+  if (!fs.existsSync(videoPath)) {
+    res.status(404).json({ error: 'Video not found' });
+    return;
+  }
+
+  res.sendFile(videoPath);
+});
+
+// Fallback 404 handler (always JSON)
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
