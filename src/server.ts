@@ -1,14 +1,12 @@
 import express from 'express';
 import cors from 'cors';
-import { generateVideo, generateScrollingScriptVideo } from './videoGenerator.ts';
-import { generateSpeech } from './textToSpeech.ts';
-import { enhanceScript } from './codeAnalyzer.ts';
+// Route handlers moved to `weaveit-generator/` for cleaner organization
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import videosStatusRoute from './videosStatusRoute.ts';
-import generateRoute from './generateRoute.ts';
+import videosStatusRoute from '../weaveit-generator/videosStatusRoute.ts';
+import generateRoute from '../weaveit-generator/generateRoute.ts';
 
 // Load environment variables from root .env file
 dotenv.config({ path: path.join(process.cwd(), '.env') });

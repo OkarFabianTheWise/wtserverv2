@@ -1,50 +1,58 @@
-// import express from 'express';
-// import type { Request, Response } from 'express';
-// import path from 'path';
-// import fs from 'fs';
-// import { fileURLToPath } from 'url';
-// import { enhanceScript } from './codeAnalyzer.ts';
-// import { generateSpeech } from './textToSpeech.ts';
-// import { generateScrollingScriptVideo } from './videoGenerator.ts';
+import express from 'express';
+import type { Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import { enhanceScript } from '../src/codeAnalyzer.ts';
+import { generateSpeech } from '../src/textToSpeech.ts';
+import { generateScrollingScriptVideo } from '../src/videoGenerator.ts';
 
-// const router = express.Router();
+const router = express.Router();
 
-// // ESM dirname
-// const __filename = fileURLToPath(import.meta.url);
-// const __dirname = path.dirname(__filename);
-// const outputDir = path.join(__dirname, 'output');
+function makeContentId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
-// // POST /generate
-// router.post('/generate', async (req: Request, res: Response) => {
-//   try {
-//     const { script, title, walletAddress, transactionSignature } = req.body;
-//     console.log('Processing tutorial request:', { title, transactionSignature });
+// Use the server's `src/output` directory so static serving matches
+const outputDir = path.join(process.cwd(), 'src', 'output');
 
-//     if (!transactionSignature) {
-//       return res.status(400).json({ error: 'Transaction signature is required' });
-//     }
+// POST /api/generate
+// POST /api/generate
+router.post('/generate', async (req: Request, res: Response) => {
+  try {
+    let { transactionSignature, script, title } = req.body;
 
-//     if (!fs.existsSync(outputDir)) {
-//       fs.mkdirSync(outputDir, { recursive: true });
-//     }
+    if (!script || typeof script !== 'string' || script.trim() === '') {
+      return res.status(400).json({ error: 'Missing script in request body' });
+    }
 
-//     // AI narration
-//     const explanation = await enhanceScript(script);
-//     const audioPath = path.join(outputDir, `${transactionSignature}.mp3`);
-//     const videoPath = path.join(outputDir, `${transactionSignature}.mp4`);
+    if (!transactionSignature) {
+      transactionSignature = makeContentId();
+    }
 
-//     await generateSpeech(explanation, audioPath);
-//     await generateScrollingScriptVideo(script, audioPath, videoPath);
+    console.log('weaveit-generator: Processing tutorial request:', { title, transactionSignature });
 
-//     res.json({
-//       contentId: transactionSignature,
-//       videoUrl: `/output/${transactionSignature}.mp4`,
-//       message: 'Educational tutorial video generated successfully',
-//     });
-//   } catch (error) {
-//     console.error('Video generation error:', error);
-//     res.status(500).json({ error: 'Failed to generate video' });
-//   }
-// });
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
 
-// export default router;
+    // Enhance the script for narration
+    const explanation = await enhanceScript(script);
+    const audioPath = path.join(outputDir, `${transactionSignature}.mp3`);
+    const videoPath = path.join(outputDir, `${transactionSignature}.mp4`);
+
+    // Generate speech and video (these may take time)
+    await generateSpeech(explanation, audioPath);
+    await generateScrollingScriptVideo(script, audioPath, videoPath);
+
+    res.json({
+      contentId: transactionSignature,
+      videoUrl: `/output/${transactionSignature}.mp4`,
+      message: 'Educational tutorial video generated successfully',
+    });
+  } catch (error) {
+    console.error('weaveit-generator: Video generation error:', error);
+    res.status(500).json({ error: 'Failed to generate video' });
+  }
+});
+
+export default router;
