@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import videosStatusRoute from '../weaveit-generator/videosStatusRoute.ts';
 import generateRoute from '../weaveit-generator/generateRoute.ts';
+import { testConnection } from './db.ts';
 
 // Load environment variables from root .env file
 dotenv.config({ path: path.join(process.cwd(), '.env') });
@@ -36,6 +37,16 @@ app.get('/api/videos/:transactionSignature', (req, res) => {
   }
 
   res.sendFile(videoPath);
+});
+
+// DB health endpoint
+app.get('/api/db/health', async (_req, res) => {
+  try {
+    await testConnection();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
 });
 
 // Fallback 404 handler (always JSON)
