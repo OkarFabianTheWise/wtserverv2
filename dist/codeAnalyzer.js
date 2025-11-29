@@ -1,35 +1,88 @@
-"use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyzeCode = analyzeCode;
-// src/codeAnalyzer.ts
-const openai_1 = require("openai");
-const dotenv_1 = require("dotenv");
-(0, dotenv_1.config)();
-const openai = new openai_1.OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-function analyzeCode(code) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const prompt = `Explain the following code as a tutorial for beginners. Include step-by-step reasoning and note the language:
+import { OpenAI } from 'openai';
+import { config } from 'dotenv';
+config();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+export async function analyzeCode(code) {
+    const prompt = `Explain the following code as a tutorial for beginners. Include step-by-step reasoning and note the language:
 
 \n\n\`\`\`
 ${code}
 \`\`\``;
-        const completion = yield openai.chat.completions.create({
-            model: 'gpt-4',
-            messages: [{ role: 'user', content: prompt }],
-        });
-        const response = completion.choices[0].message.content || '';
-        return {
-            tutorialText: response.trim(),
-            language: 'typescript', // optionally detect via code parsing
-        };
+    const completion = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: prompt }],
     });
+    const response = completion.choices[0].message.content || '';
+    return {
+        tutorialText: response.trim(),
+        language: 'typescript', // optionally detect via code parsing
+    };
 }
+export async function enhanceScript(script) {
+    try {
+        const prompt = `
+Explain this code in small, natural segments that can be shown on screen. Format your response as segments separated by [PAUSE] markers. Each segment should be 1-2 sentences that explain what's visible on screen at that moment. The video will scroll to show new code only after each segment is narrated.
+
+For example:
+"The first line imports the OpenAI client from the openai package, which we'll use to interact with GPT-4. [PAUSE]
+Next, we import the config function from dotenv to handle our environment variables. [PAUSE]"
+
+Keep each segment focused and concise. The video will scroll to reveal new code only after each [PAUSE].
+
+Here's the code to explain:
+
+${script}
+    `;
+        const response = await openai.chat.completions.create({
+            model: "gpt-4",
+            messages: [
+                {
+                    role: "system",
+                    content: "You are a code narrator creating synchronized voice-over for a scrolling code tutorial. Break your explanation into small segments marked with [PAUSE]. Each segment should match what's visible on screen at that moment. Never use phrases like 'as we can see' or 'looking at'. Just explain directly."
+                },
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ],
+            temperature: 0.3,
+            max_tokens: 1500
+        });
+        return response.choices[0].message.content?.trim() || '';
+    }
+    catch (error) {
+        console.error('Error enhancing script:', error);
+        return '';
+    }
+}
+// Alternative version with even more specific constraints
+export async function enhanceScriptDirect(script) {
+    try {
+        const prompt = `
+Narrate this code. Start with the first line and explain what's happening:
+
+${script}
+    `;
+        const response = await openai.chat.completions.create({
+            model: "gpt-4",
+            messages: [
+                {
+                    role: "system",
+                    content: "Narrate code directly. No introductions like 'This code does...' or 'Let's look at...'. Start immediately with 'Here we're importing...' or 'This line creates...' etc."
+                },
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ],
+            temperature: 0.2, // Very low for consistent behavior
+            max_tokens: 1000
+        });
+        return response.choices[0].message.content?.trim() || '';
+    }
+    catch (error) {
+        console.error('Error enhancing script:', error);
+        return '';
+    }
+}
+//# sourceMappingURL=codeAnalyzer.js.map

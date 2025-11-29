@@ -364,5 +364,8 @@ export async function deductUserPoints(walletAddress: string, points: number): P
      RETURNING prompt_points`,
     [points, walletAddress]
   );
-  return result.rowCount > 0 ? (result.rows[0]?.prompt_points || 0) : null;
+  if (result.rowCount === 0) {
+    return null; // insufficient credits
+  }
+  return result.rows[0]?.prompt_points || 0;
 }

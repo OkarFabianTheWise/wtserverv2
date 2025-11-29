@@ -5,7 +5,7 @@ const router = express.Router();
 
 // GET /api/users/:walletAddress/points
 // Returns { walletAddress, points, trial_expires_at }
-router.get('/users/:walletAddress/points', async (req, res) => {
+router.get('/users/:walletAddress/points', async (req: any, res: any) => {
   try {
     const { walletAddress } = req.params;
     if (!walletAddress) return res.status(400).json({ error: 'walletAddress required' });
