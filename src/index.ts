@@ -1,5 +1,5 @@
 // src/index.ts
-export { Config } from './config.ts';
-export { analyzeCode } from './codeAnalyzer.ts';
-export { generateSpeech } from './textToSpeech.ts';
-export { generateVideo } from './videoGenerator.ts';
+export { Config } from './config';
+export { analyzeCode } from './codeAnalyzer';
+export { generateSpeech } from './textToSpeech';
+export { generateVideo } from './videoGenerator';

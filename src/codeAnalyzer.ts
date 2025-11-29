@@ -1,6 +1,6 @@
 import { OpenAI } from 'openai';
 import { config } from 'dotenv';
-import type { TutorialResult } from './types.ts';
+import type { TutorialResult } from './types';
 
 config();
 
