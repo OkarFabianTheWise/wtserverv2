@@ -3,12 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { CanvasRenderingContext2D, createCanvas } from 'canvas';
-// import gTTS from 'node-gtts';
-
-const FF_BASE = process.env.FFMPEG_PATH || "/app/.heroku/ffmpeg/bin";
-
-ffmpeg.setFfmpegPath(path.join(FF_BASE, "ffmpeg"));
-ffmpeg.setFfprobePath(path.join(FF_BASE, "ffprobe"));
 
 
 /**
