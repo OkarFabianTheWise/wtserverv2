@@ -1,23 +1,19 @@
-# Use a stable Node version
-FROM node:22-alpine
+FROM node:22
 
-# Create app directory
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    libusb-1.0-0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy package files first (better caching)
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install --production=false
 
-# Copy rest of app
 COPY . .
-
-# Build TypeScript -> JavaScript
 RUN npm run build
-
-# Switch to production mode for final run
 RUN npm prune --production
 
-# Set correct CMD
 CMD ["node", "dist/server.js"]
