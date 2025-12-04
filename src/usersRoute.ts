@@ -1,5 +1,5 @@
 import express from 'express';
-import { getUserInfo, expireTrialsForWallet } from './db';
+import { getUserInfo, expireTrialsForWallet } from './db.js';
 
 const router = express.Router();
 
