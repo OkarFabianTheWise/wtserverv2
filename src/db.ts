@@ -308,6 +308,30 @@ export async function getContentByWallet(walletAddress: string): Promise<Array<{
   return result.rows;
 }
 
+// Count completed jobs for a wallet
+export async function getCompletedJobsCount(walletAddress: string): Promise<number> {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int as count FROM video_jobs WHERE wallet_address = $1 AND status = 'completed'`,
+    [walletAddress]
+  );
+  return result.rows[0]?.count || 0;
+}
+
+// Sum total duration seconds for all content (video or audio) for a wallet
+export async function getTotalDurationSecondsForWallet(walletAddress: string): Promise<number> {
+  const result = await pool.query(
+    `SELECT COALESCE(SUM(duration_sec), 0) as total_seconds FROM videos WHERE wallet_address = $1`,
+    [walletAddress]
+  );
+  return Number(result.rows[0]?.total_seconds || 0);
+}
+
+// Total number of users in the system
+export async function getTotalUsersCount(): Promise<number> {
+  const result = await pool.query(`SELECT COUNT(*)::int as count FROM users`);
+  return result.rows[0]?.count || 0;
+}
+
 // Audio retrieval
 export async function getAudioByJobId(jobId: string): Promise<Buffer | null> {
   const result = await pool.query(

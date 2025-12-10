@@ -5,7 +5,7 @@ import path from 'path';
 import videosStatusRoute from './weaveit-generator/videosStatusRoute.js';
 import generateRoute from './weaveit-generator/generateRoute.js';
 import generateAudioRoute from './weaveit-generator/generateAudioRoute.js';
-import { testConnection, getVideoByJobId, getVideoByVideoId, getVideosByWallet, getAudioByJobId, getAudioByAudioId, getContentByWallet } from './db.js';
+import { testConnection, getVideoByJobId, getVideoByVideoId, getVideosByWallet, getAudioByJobId, getAudioByAudioId, getContentByWallet, getUserInfo, getCompletedJobsCount, getTotalDurationSecondsForWallet, getTotalUsersCount } from './db.js';
 import paymentsRoute from './paymentsRoute.js';
 import usersRoute from './usersRoute.js';
 
@@ -122,6 +122,27 @@ app.get('/api/wallet/:walletAddress/content', async (req, res) => {
   } catch (err) {
     console.error('Error fetching wallet content:', err);
     res.status(500).json({ error: 'Failed to retrieve content' });
+  }
+});
+
+// Get global stats for landing page
+app.get('/api/stats', async (req, res) => {
+  try {
+    // Fetch global stats in parallel
+    const [totalSeconds, totalUsers] = await Promise.all([
+      getTotalDurationSecondsForWallet(''), // Get all durations (empty wallet means global)
+      getTotalUsersCount()
+    ]);
+
+    const totalMinutes = Number((totalSeconds / 60).toFixed(2));
+
+    res.json({
+      total_minutes: totalMinutes,
+      total_users: totalUsers
+    });
+  } catch (err) {
+    console.error('Error fetching global stats:', err);
+    res.status(500).json({ error: 'Failed to retrieve stats' });
   }
 });
 
