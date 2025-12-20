@@ -106,8 +106,8 @@ export async function expireTrialsForWallet(walletAddress: string, initialTrialC
     if (result.rowCount === 0) return null;
     const row = result.rows[0];
     const expiresAt: Date | null = row.trial_expires_at || null;
-    const freePoints: number = row.prompt_points || 0;
-    const paidPoints: number = row.paid_points || 0;
+    const freePoints: number = Number(row.prompt_points || 0);
+    const paidPoints: number = Number(row.paid_points || 0);
     const totalPoints: number = freePoints + paidPoints;
     if (!expiresAt) return totalPoints;
 
@@ -115,16 +115,22 @@ export async function expireTrialsForWallet(walletAddress: string, initialTrialC
     const expired = new Date(expiresAt) < now;
     if (!expired) return totalPoints;
 
-    if (freePoints <= initialTrialCredits) {
-      // Likely only trial credits remain — zero the free points
+    // Only remove up to the original trial grant (e.g. 28 points).
+    // This clears the trial marker and subtracts at most initialTrialCredits
+    // from the user's free prompt_points (never touch paid_points).
+    const amountToClear = Math.min(initialTrialCredits, freePoints);
+    if (amountToClear > 0) {
       await pool.query(
-        'UPDATE users SET prompt_points = 0, trial_expires_at = NULL WHERE wallet_address = $1',
-        [walletAddress]
+        `UPDATE users 
+         SET prompt_points = GREATEST(COALESCE(prompt_points, 0) - $1, 0), 
+             trial_expires_at = NULL 
+         WHERE wallet_address = $2`,
+        [amountToClear, walletAddress]
       );
-      return paidPoints;
+      return totalPoints - amountToClear;
     }
 
-    // User has more than initial trial credits — preserve their balance but clear the trial marker
+    // Nothing to subtract, just clear the trial marker
     await pool.query(
       'UPDATE users SET trial_expires_at = NULL WHERE wallet_address = $1',
       [walletAddress]
@@ -466,37 +472,38 @@ export async function deductUserPoints(walletAddress: string, points: number): P
   );
   if (balanceResult.rowCount === 0) return null;
   const row = balanceResult.rows[0];
-  const freePoints = row.prompt_points || 0;
-  const paidPoints = row.paid_points || 0;
+  const freePoints = Number(row.prompt_points || 0);
+  const paidPoints = Number(row.paid_points || 0);
   const totalPoints = freePoints + paidPoints;
 
   if (totalPoints < points) return null; // insufficient total credits
 
-  // Check daily limit
+  // Determine how much must be taken from free (trial) vs paid points
+  const deductFree = Math.min(points, freePoints);
+  const deductPaid = points - deductFree;
+
+  // Check daily limit ONLY for free (trial) points
   const dailyResult = await pool.query(
-    'SELECT daily_used FROM users WHERE wallet_address = $1',
+    'SELECT COALESCE(daily_used, 0) as daily_used FROM users WHERE wallet_address = $1',
     [walletAddress]
   );
-  const dailyUsed = dailyResult.rows[0]?.daily_used || 0;
-  if (dailyUsed + points > 4) return null; // daily limit exceeded
+  const dailyUsed = Number(dailyResult.rows[0]?.daily_used || 0);
+  if (dailyUsed + deductFree > 4) return null; // daily trial limit exceeded
 
-  // Deduct: free points first, then paid
-  let deductFree = Math.min(points, freePoints);
-  let deductPaid = points - deductFree;
-
+  // Perform atomic update: subtract free & paid appropriately, increment daily_used only by free deduction
   const updateResult = await pool.query(
     `UPDATE users 
-     SET prompt_points = prompt_points - $1, 
-         paid_points = paid_points - $2,
-         daily_used = daily_used + $3
+     SET prompt_points = GREATEST(COALESCE(prompt_points, 0) - $1, 0), 
+         paid_points = GREATEST(COALESCE(paid_points, 0) - $2, 0),
+         daily_used = COALESCE(daily_used, 0) + $3
      WHERE wallet_address = $4
      RETURNING prompt_points, paid_points`,
-    [deductFree, deductPaid, points, walletAddress]
+    [deductFree, deductPaid, deductFree, walletAddress]
   );
 
   if (updateResult.rowCount === 0) return null;
   const updatedRow = updateResult.rows[0];
-  return (updatedRow.prompt_points || 0) + (updatedRow.paid_points || 0);
+  return (Number(updatedRow.prompt_points || 0) + Number(updatedRow.paid_points || 0));
 }
 
 export async function saveScrollImage(
