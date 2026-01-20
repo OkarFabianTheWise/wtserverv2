@@ -4,6 +4,8 @@ import crypto from 'crypto';
 import { enhanceScript, generateTitle } from '../codeAnalyzer.js';
 import { generateSpeechBuffer } from '../textToSpeech.js';
 import { generateScrollingScriptVideoBuffer } from '../videoGenerator.js';
+import { setupRemotionV2 } from '../remotion/openaiProcessor.js';
+import { renderAnimationScriptToVideo } from '../remotion/videoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
 import { wsManager } from '../websocket.js';
 
@@ -60,41 +62,67 @@ async function sendWebhook(jobId: string, status: string, videoId?: string, dura
 }
 
 // Background processing function
-async function processVideoGeneration(jobId: string, walletAddress: string, script: string, explanation: string) {
+async function processVideoGeneration(
+  jobId: string,
+  walletAddress: string,
+  script: string,
+  voiceoverText: string,
+  renderVersion: string = 'v2',
+  animationScriptData?: any
+) {
   try {
-    // if (VERBOSE_LOGGING) console.log(`🚀 Starting background processing for job ${jobId}`);
+    // if (VERBOSE_LOGGING) console.log(`🚀 Starting background processing for job ${jobId} using ${renderVersion}`);
 
     // Emit initial progress
-    wsManager.emitProgress(jobId, 0, 'generating', 'Starting video generation...');
+    wsManager.emitProgress(jobId, 0, 'generating', 'Generating...');
 
-    // Generate speech buffer (no file saving)
-    wsManager.emitProgress(jobId, 2, 'generating', 'Initializing audio generation...');
-    wsManager.emitProgress(jobId, 5, 'generating', 'Generating audio narration...');
-    const audioBuffer = await generateSpeechBuffer(explanation);
+    // ===== AUDIO GENERATION PHASE =====
+    // Generate speech buffer from voiceover text
+    wsManager.emitProgress(jobId, 2, 'generating', 'Generating...');
+    wsManager.emitProgress(jobId, 5, 'generating', 'Generating...');
+    const audioBuffer = await generateSpeechBuffer(voiceoverText);
     // if (VERBOSE_LOGGING) console.log(`Generated audio: ${audioBuffer.length} bytes`);
-    wsManager.emitProgress(jobId, 10, 'generating', 'Audio narration completed');
+    wsManager.emitProgress(jobId, 15, 'generating', 'Generating...');
 
-    // Generate video buffer (uses temp files internally but returns buffer)
-    wsManager.emitProgress(jobId, 15, 'generating', 'Preparing video creation...');
-    wsManager.emitProgress(jobId, 20, 'generating', 'Creating video from script...');
-    const videoBuffer = await generateScrollingScriptVideoBuffer(script, audioBuffer);
+    let videoBuffer: Buffer;
+
+    // ===== VIDEO RENDERING PHASE =====
+    // Choose rendering engine based on version
+    if (renderVersion === 'v2') {
+      // For v2, animationScript is pre-processed in setup phase
+      wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
+      wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
+
+      if (animationScriptData) {
+        // Use pre-processed AnimationScript from setup phase
+        // This merges the rendered animation with the audio
+        videoBuffer = await renderAnimationScriptToVideo(animationScriptData, audioBuffer);
+      } else {
+        // Fallback: shouldn't happen in v2, but keep for safety
+        throw new Error('AnimationScript not provided for v2 rendering');
+      }
+
+      wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+    } else {
+      // v1 rendering
+      wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
+      wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
+      videoBuffer = await generateScrollingScriptVideoBuffer(script, audioBuffer);
+      wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+    }
+
     // if (VERBOSE_LOGGING) console.log(`Generated video: ${videoBuffer.length} bytes`);
-    wsManager.emitProgress(jobId, 30, 'generating', 'Video creation completed');
 
+    // ===== VIDEO STORAGE PHASE =====
     // Calculate duration from audio buffer (in seconds)
     const durationSec = estimateAudioDuration(audioBuffer);
     // if (VERBOSE_LOGGING) console.log(`Estimated duration: ${durationSec} seconds`);
-    wsManager.emitProgress(jobId, 35, 'generating', 'Calculating video duration...');
+    wsManager.emitProgress(jobId, 45, 'generating', 'Storing...');
 
     // Store video in database
     const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
     // if (VERBOSE_LOGGING) console.log('Stored video in database:', videoId);
-    wsManager.emitProgress(jobId, 40, 'generating', 'Storing video in database...');
-
-    // Update job status to completed
-    await updateJobStatus(jobId, 'completed');
-
-    // Send webhook
+    wsManager.emitProgress(jobId, 75, 'generating', 'Storing...');
     await sendWebhook(jobId, 'completed', videoId, durationSec);
 
     // Emit completion
@@ -117,6 +145,13 @@ const generateHandler = async (req: Request, res: Response): Promise<void> => {
 
   try {
     let { walletAddress, script, prompt } = req.body;
+    const renderVersion = (req.query.renderVersion as string) || 'v2'; // Default to v2
+
+    // Validate render version
+    if (!['v1', 'v2'].includes(renderVersion)) {
+      res.status(400).json({ error: 'Invalid renderVersion. Use v1 or v2' });
+      return;
+    }
 
     if (!script || typeof script !== 'string' || script.trim() === '') {
       res.status(400).json({ error: 'Missing script in request body' });
@@ -129,7 +164,7 @@ const generateHandler = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // if (VERBOSE_LOGGING) console.log('weaveit-generator: Processing tutorial request:', { walletAddress, scriptLength: script.length, hasPrompt: !!prompt });
+    // if (VERBOSE_LOGGING) console.log('weaveit-generator: Processing tutorial request:', { walletAddress, scriptLength: script.length, hasPrompt: !!prompt, renderVersion });
 
     // Check credit balance before proceeding (video costs 2 credits)
     const VIDEO_COST = 2;
@@ -143,9 +178,33 @@ const generateHandler = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate title automatically based on script content
-    const title = await generateTitle(script);
-    // if (VERBOSE_LOGGING) console.log('Generated title:', title);
+    // ===== SETUP PHASE =====
+    let title: string;
+    let explanation: string;
+    let animationScript: any = null;
+
+    if (renderVersion === 'v2') {
+      // V2: Setup Remotion and get everything we need
+      console.log('🚀 Setting up Remotion v2 for script...');
+      const remotionSetup = await setupRemotionV2(script);
+      title = remotionSetup.title;
+      explanation = remotionSetup.voiceoverText; // Use the voiceover from AnimationScript
+      animationScript = remotionSetup.animationScript; // Save for background rendering
+
+      // Log the AnimationScript response for vetting
+      console.log('\n📋 ===== OPENAI RESPONSE (AnimationScript) =====');
+      console.log('Title:', title);
+      console.log('Voiceover Text:', explanation);
+      console.log('AnimationScript Structure:');
+      console.log(JSON.stringify(animationScript, null, 2));
+      console.log('===== END RESPONSE =====\n');
+
+      console.log('✅ Remotion v2 setup complete');
+    } else {
+      // V1: Use old approach
+      title = await generateTitle(script);
+      explanation = await enhanceScript(script, prompt);
+    }
 
     // Create job in database with job_type = 'video'
     jobId = await createVideoJob(walletAddress, script, title, 'video');
@@ -154,26 +213,31 @@ const generateHandler = async (req: Request, res: Response): Promise<void> => {
     // Update status to generating
     await updateJobStatus(jobId, 'generating');
 
-    // Enhance the script for narration (use custom prompt if provided)
-    const explanation = await enhanceScript(script, prompt);
-
     // Respond immediately with job ID
     res.json({
       jobId,
       status: 'generating',
       title,
+      renderVersion,
       creditsDeducted: VIDEO_COST,
       remainingCredits: newBalance,
-      message: 'Video generation started. Check status via polling or webhook.',
+      message: `Video generation started using ${renderVersion}. Check status via polling or webhook.`,
     });
 
+    // ===== BACKGROUND PROCESSING PHASE =====
     // Process in background
     setImmediate(() => {
-      processVideoGeneration(jobId!, walletAddress, script, explanation);
+      processVideoGeneration(jobId!, walletAddress, script, explanation, renderVersion, animationScript);
     });
 
   } catch (error) {
     if (VERBOSE_LOGGING) console.error('weaveit-generator: Video generation setup error:', error);
+
+    // Update job status to failed if we have a jobId
+    if (jobId) {
+      await updateJobStatus(jobId, 'failed', String(error)).catch(console.error);
+      await sendWebhook(jobId, 'failed', undefined, undefined, String(error));
+    }
   }
 
   if (!res.headersSent) {

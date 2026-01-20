@@ -124,6 +124,45 @@ app.get('/api/wallet/:walletAddress/videos', async (req, res) => {
   }
 });
 
+// Delete a video for a wallet address
+app.delete('/api/wallet/:walletAddress/videos/:videoId', async (req, res) => {
+  try {
+    const { walletAddress, videoId } = req.params;
+
+    // Verify the video belongs to this wallet
+    const videoBuffer = await getVideoByVideoId(videoId);
+    if (!videoBuffer) {
+      res.status(404).json({ error: 'Video not found' });
+      return;
+    }
+
+    // Verify ownership by checking wallet_address in database
+    const videoRecord = await pool.query(
+      'SELECT wallet_address FROM videos WHERE video_id = $1',
+      [videoId]
+    );
+
+    if (videoRecord.rows.length === 0) {
+      res.status(404).json({ error: 'Video not found' });
+      return;
+    }
+
+    if (videoRecord.rows[0].wallet_address !== walletAddress) {
+      res.status(403).json({ error: 'Unauthorized - video does not belong to this wallet' });
+      return;
+    }
+
+    // Delete the video
+    await pool.query('DELETE FROM videos WHERE video_id = $1', [videoId]);
+
+    console.log(`🗑️ Video ${videoId} deleted by ${walletAddress}`);
+    res.json({ success: true, message: 'Video deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting video:', err);
+    res.status(500).json({ error: 'Failed to delete video' });
+  }
+});
+
 // Get all content (videos and audios) for a wallet address
 app.get('/api/wallet/:walletAddress/content', async (req, res) => {
   try {

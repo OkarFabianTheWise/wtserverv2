@@ -2,4 +2,5 @@
 export { Config } from './config';
 export { analyzeCode } from './codeAnalyzer';
 export { generateSpeech } from './textToSpeech';
-export { generateVideo } from './videoGenerator';
+// Legacy v1 system - see src/remotion/videoGenerator.ts for v2.0
+// export { generateVideo } from './videoGenerator';

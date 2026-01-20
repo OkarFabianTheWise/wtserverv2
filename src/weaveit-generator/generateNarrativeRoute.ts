@@ -3,7 +3,8 @@ import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import { generateNarrativeStoryboard, generateTitle } from '../codeAnalyzer.js';
 import { generateSpeechBuffer } from '../textToSpeech.js';
-import { generateNarrativeVideoBuffer } from '../narrativeAnimationGenerator.js';
+import { processCodeWithOpenAI } from '../remotion/openaiProcessor.js';
+import { renderAnimationScriptToVideo } from '../remotion/videoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
 import { wsManager } from '../websocket.js';
 
@@ -96,13 +97,18 @@ async function processNarrativeGeneration(jobId: string, walletAddress: string, 
     // console.log(`Generated audio: ${audioBuffer.length} bytes`);
     wsManager.emitProgress(jobId, 30, 'generating', 'Audio narration completed');
 
-    // Generate narrative video buffer
-    // console.log('🎨 Generating narrative animation video...');
-    wsManager.emitProgress(jobId, 35, 'generating', 'Preparing animation...');
-    wsManager.emitProgress(jobId, 40, 'generating', 'Creating narrative animation...');
-    const videoBuffer = await generateNarrativeVideoBuffer(scenes, audioBuffer);
+    // Process narration with OpenAI (no re-processing, just once)
+    // console.log('🤖 Processing narration with OpenAI...');
+    wsManager.emitProgress(jobId, 35, 'generating', 'Processing narration...');
+    const animationScript = await processCodeWithOpenAI(narrationText);
+    wsManager.emitProgress(jobId, 50, 'generating', 'Animation script ready');
+
+    // Render animation to video using pre-processed script
+    // console.log('🎨 Rendering narrative animation video...');
+    wsManager.emitProgress(jobId, 55, 'generating', 'Rendering animation...');
+    const videoBuffer = await renderAnimationScriptToVideo(animationScript, audioBuffer);
     // console.log(`Generated narrative video: ${videoBuffer.length} bytes`);
-    wsManager.emitProgress(jobId, 60, 'generating', 'Narrative animation completed');
+    wsManager.emitProgress(jobId, 75, 'generating', 'Video rendering completed');
 
     // Calculate duration from audio buffer
     const durationSec = estimateAudioDuration(audioBuffer);

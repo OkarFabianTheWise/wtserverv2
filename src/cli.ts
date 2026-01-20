@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { analyzeCode } from './codeAnalyzer';
 import { generateSpeech } from './textToSpeech';
-import { generateVideo } from './videoGenerator';
+// import { generateVideo } from './videoGenerator'; // Legacy v1 - use API instead
 
 const program = new Command();
 
