@@ -13,6 +13,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import OpenAI from 'openai';
 import { processCodeWithOpenAI, msToFrames } from './openaiProcessor.js';
 import type { AnimationScript } from './types';
 
@@ -379,6 +380,287 @@ export async function generateVideoWithRemotion2(
 
         throw error;
     }
+}
+
+/**
+ * Sora v3 Video Generation - Simplified API
+ * All requests use sora-2 model with intelligent audio handling
+ * Narration/explanation is embedded in video (Sora's native sound + optional merge)
+ */
+
+/**
+ * Generate a video using OpenAI's Sora API (v3)
+ * Simple unified function for UI - just send question/script and optional audio
+ * Returns job ID for websocket-based progress tracking
+ * 
+ * @param scriptOrQuestion The script or question to generate a video for
+ * @param audioBuffer Optional narration audio to merge with video
+ * @returns Job ID for tracking video generation progress
+ */
+export async function generateVideoWithSora(
+    scriptOrQuestion: string,
+    audioBuffer?: Buffer
+): Promise<string> {
+    try {
+        console.log('🎬 Sora v3 Video Generation Started');
+        console.log('📝 Input length:', scriptOrQuestion.length, 'characters');
+        console.log('   Model: sora-2 (preset)');
+        console.log('   Audio handling: Intelligent (Sora native + optional merge)');
+
+        // Initialize OpenAI client
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY || '',
+        });
+
+        // Create a prompt for Sora from the script/question
+        const soraPrompt = generateSoraPrompt(scriptOrQuestion);
+        console.log('🎨 Generated Sora prompt:', soraPrompt.substring(0, 150) + '...');
+
+        // Call Sora API to generate video (always 8 seconds, sora-2 model)
+        console.log('📹 Calling Sora API to create video job...');
+        const video = await (openai as any).videos.create({
+            model: 'sora-2', // Preset to sora-2
+            prompt: soraPrompt,
+            size: '1280x720', // Standard HD size
+            seconds: '8' as any, // Preset to 8 seconds
+        } as any);
+
+        const videoId = (video as any).id;
+        const status = (video as any).status;
+
+        console.log('✅ Sora video job created');
+        console.log('   Job ID:', videoId);
+        console.log('   Status:', status);
+
+        // Store audio buffer metadata for later use if provided
+        if (audioBuffer) {
+            console.log('📝 Audio buffer provided:', audioBuffer.length, 'bytes');
+        }
+
+        return videoId;
+    } catch (error) {
+        console.error('❌ Error creating Sora video:', error);
+        throw error;
+    }
+}
+
+/**
+ * Check the status of a Sora video generation job
+ * Use for websocket progress updates
+ * 
+ * @param videoId The job ID returned from generateVideoWithSora
+ * @returns Job status with progress information
+ */
+export async function getSoraVideoStatus(videoId: string): Promise<{
+    id: string;
+    status: 'queued' | 'in_progress' | 'completed' | 'failed';
+    progress?: number;
+    url?: string;
+}> {
+    try {
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY || '',
+        });
+
+        console.log('📊 Checking Sora video status:', videoId);
+        const video = await (openai as any).videos.retrieve(videoId);
+
+        const status = (video as any).status;
+        const url = (video as any).url;
+        const progress = (video as any).progress || 0;
+
+        console.log('   Status:', status);
+        if (progress) console.log('   Progress:', progress, '%');
+
+        return {
+            id: videoId,
+            status,
+            progress,
+            url,
+        };
+    } catch (error) {
+        console.error('❌ Error checking Sora video status:', error);
+        throw error;
+    }
+}
+
+/**
+ * Download completed Sora video as buffer
+ * Intelligently handles audio based on Sora's native sound
+ * 
+ * @param videoId The job ID of the completed video
+ * @param audioBuffer Optional narration to merge (ignored if Sora video has native sound)
+ * @returns Buffer containing the final video (with merged audio if needed)
+ */
+export async function downloadSoraVideo(
+    videoId: string,
+    audioBuffer?: Buffer
+): Promise<Buffer> {
+    const tempDir = os.tmpdir();
+    const tempId = `sora-download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const videoPath = path.join(tempDir, `${tempId}.mp4`);
+    const audioPath = audioBuffer ? path.join(tempDir, `${tempId}.mp3`) : null;
+    const finalVideoPath = audioBuffer ? path.join(tempDir, `${tempId}_final.mp4`) : videoPath;
+
+    try {
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY || '',
+        });
+
+        console.log('📥 Downloading Sora video...');
+        const content = await (openai as any).videos.downloadContent(videoId, 'video' as any);
+        const videoBuffer = Buffer.from(await content.arrayBuffer());
+
+        console.log(`✅ Downloaded video: ${videoBuffer.length} bytes`);
+
+        // Write video to temp file
+        fs.writeFileSync(videoPath, videoBuffer);
+
+        // Step 2: Check if audio merge is needed
+        if (audioBuffer && audioPath) {
+            console.log('🎵 Audio buffer provided - checking if merge needed...');
+            console.log('   ℹ️  Sora may include native sound');
+            console.log('   📝 Merging provided audio for narration/explanation...');
+
+            // Write audio to temp file
+            fs.writeFileSync(audioPath, audioBuffer);
+
+            // Merge audio with video
+            console.log('🎵 Merging audio with Sora video...');
+            await mergeAudioWithVideo(videoPath, audioPath, finalVideoPath);
+            console.log('✅ Audio merged successfully');
+
+            // Verify final video
+            if (!fs.existsSync(finalVideoPath)) {
+                throw new Error('Final video file was not created');
+            }
+            const finalStats = fs.statSync(finalVideoPath);
+            console.log(`📹 Final video size: ${(finalStats.size / 1024 / 1024).toFixed(2)} MB`);
+
+            // Read final video buffer
+            const finalVideoBuffer = fs.readFileSync(finalVideoPath);
+
+            // Cleanup
+            console.log('🧹 Cleaning up temporary files...');
+            [videoPath, audioPath, finalVideoPath].forEach(file => {
+                try {
+                    if (fs.existsSync(file)) fs.unlinkSync(file);
+                } catch (err) {
+                    // Silently fail cleanup
+                }
+            });
+
+            return finalVideoBuffer;
+        } else {
+            // Use Sora's native sound only
+            console.log('✅ Using Sora video with native sound (no additional audio merge)');
+
+            const singleVideoBuffer = fs.readFileSync(videoPath);
+            console.log(`📦 Video buffer size: ${singleVideoBuffer.length} bytes`);
+
+            // Cleanup
+            try {
+                if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+            } catch (err) {
+                // Silently fail cleanup
+            }
+
+            return singleVideoBuffer;
+        }
+    } catch (error) {
+        console.error('❌ Error downloading Sora video:', error);
+
+        // Cleanup on error
+        [videoPath, audioPath, finalVideoPath].forEach(file => {
+            if (file && fs.existsSync(file)) {
+                try {
+                    fs.unlinkSync(file);
+                } catch (err) {
+                    // Silently fail cleanup
+                }
+            }
+        });
+
+        throw error;
+    }
+}
+
+/**
+ * Combined function: Generate, poll, and download Sora video
+ * Preset to sora-2 model, 8 seconds, intelligent audio handling
+ * 
+ * @param scriptOrQuestion The script or question to generate a video for
+ * @param audioBuffer Optional narration/explanation audio to merge
+ * @returns Buffer containing the final video
+ */
+export async function generateAndDownloadSoraVideo(
+    scriptOrQuestion: string,
+    audioBuffer?: Buffer
+): Promise<Buffer> {
+    try {
+        // Step 1: Create video generation job
+        console.log('🎬 Sora v3 Video Generation Started (End-to-End)');
+        const videoId = await generateVideoWithSora(scriptOrQuestion, audioBuffer);
+
+        // Step 2: Poll for completion
+        console.log('⏳ Polling for video generation completion...');
+        let status = await getSoraVideoStatus(videoId);
+        let attempts = 0;
+        const maxAttempts = 120; // Poll for up to 10 minutes (5 second intervals)
+
+        while (status.status !== 'completed' && status.status !== 'failed' && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+            attempts++;
+            status = await getSoraVideoStatus(videoId);
+            console.log(`   Poll ${attempts}/${maxAttempts}: Status = ${status.status}`);
+        }
+
+        if (status.status === 'failed') {
+            throw new Error(`Sora video generation failed after ${attempts} polls`);
+        }
+
+        if (status.status !== 'completed') {
+            throw new Error(`Sora video generation timeout after ${maxAttempts} polls`);
+        }
+
+        // Step 3: Download video with intelligent audio handling
+        console.log('📥 Downloading and processing video...');
+        const finalVideoBuffer = await downloadSoraVideo(videoId, audioBuffer);
+
+        console.log('✅ Sora v3 Video Generation Completed Successfully');
+        return finalVideoBuffer;
+    } catch (error) {
+        console.error('❌ Error in Sora v3 video generation:', error);
+        throw error;
+    }
+}
+
+/**
+ * Generate an optimized prompt for Sora from a script or question
+ * @param scriptOrQuestion The input text to convert to a Sora prompt
+ * @returns Formatted prompt for Sora API
+ */
+function generateSoraPrompt(scriptOrQuestion: string): string {
+    // Limit prompt length for Sora (typically 1000 chars max)
+    const maxLength = 1000;
+    let prompt = scriptOrQuestion.trim();
+
+    if (prompt.length > maxLength) {
+        prompt = prompt.substring(0, maxLength);
+        const lastSpace = prompt.lastIndexOf(' ');
+        if (lastSpace > 0) {
+            prompt = prompt.substring(0, lastSpace);
+        }
+    }
+
+    // Enhance prompt with visual descriptors if it seems like a technical script
+    if (scriptOrQuestion.toLowerCase().includes('code') ||
+        scriptOrQuestion.toLowerCase().includes('function') ||
+        scriptOrQuestion.toLowerCase().includes('algorithm')) {
+        prompt = `Create an educational video showing: ${prompt}. Use clear visual explanations, diagrams, and animations to illustrate concepts. Professional quality, 16:9 aspect ratio.`;
+    }
+
+    return prompt;
 }
 
 /**
