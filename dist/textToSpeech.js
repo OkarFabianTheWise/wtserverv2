@@ -15,7 +15,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 //   console.log(`✅ Voiceover saved to: ${outputPath}`);
 // }
 export async function generateSpeech(text, outputPath) {
-    console.log('🧠 Generating speech with OpenAI...');
+    // console.log('🧠 Generating speech with OpenAI...');
     const speech = await openai.audio.speech.create({
         model: 'tts-1-hd',
         voice: 'nova',
@@ -24,7 +24,7 @@ export async function generateSpeech(text, outputPath) {
     const arrayBuffer = await speech.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     fs.writeFileSync(outputPath, buffer);
-    console.log(`✅ Voiceover saved to: ${outputPath} (${buffer.length} bytes)`);
+    // console.log(`✅ Voiceover saved to: ${outputPath} (${buffer.length} bytes)`);
     if (buffer.length < 1000) {
         console.warn('⚠️ Warning: Audio file is unusually small. Check if TTS failed silently.');
     }
@@ -33,7 +33,7 @@ export async function generateSpeech(text, outputPath) {
  * Generate speech and return as buffer (for database storage)
  */
 export async function generateSpeechBuffer(text) {
-    console.log('🧠 Generating speech with OpenAI...');
+    // console.log('🧠 Generating speech with OpenAI...');
     const speech = await openai.audio.speech.create({
         model: 'tts-1-hd',
         voice: 'nova',
@@ -41,7 +41,7 @@ export async function generateSpeechBuffer(text) {
     });
     const arrayBuffer = await speech.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    console.log(`✅ Speech generated (${buffer.length} bytes)`);
+    // console.log(`✅ Speech generated (${buffer.length} bytes)`);
     if (buffer.length < 1000) {
         console.warn('⚠️ Warning: Audio file is unusually small. Check if TTS failed silently.');
     }

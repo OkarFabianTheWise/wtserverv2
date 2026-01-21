@@ -67,7 +67,7 @@ async function sendWebhook(jobId, status, videoId, duration, error) {
             console.error(`Webhook failed: ${response.status} ${response.statusText}`);
         }
         else {
-            console.log(`✅ Webhook sent for job ${jobId}: ${status}`);
+            // console.log(`✅ Webhook sent for job ${jobId}: ${status}`);
         }
     }
     catch (err) {
@@ -77,34 +77,29 @@ async function sendWebhook(jobId, status, videoId, duration, error) {
 // Background processing function
 async function processAnimationGeneration(jobId, walletAddress, script) {
     try {
-        if (VERBOSE_LOGGING)
-            console.log(`🚀 Starting background processing for animation job ${jobId}`);
+        // console.log(`🚀 Starting background processing for animation job ${jobId}`);
         // Emit initial progress
         wsManager.emitProgress(jobId, 0, 'generating', 'Starting animation generation...');
         // Generate animation script
         wsManager.emitProgress(jobId, 8, 'generating', 'Generating animation script...');
         const animationScript = await generateAnimationScriptForCode(script);
-        if (VERBOSE_LOGGING)
-            console.log(`Generated animation script:`, animationScript);
+        // console.log(`Generated animation script:`, animationScript);
         wsManager.emitProgress(jobId, 10, 'generating', 'Animation script generated');
         // Generate voice over audio
         wsManager.emitProgress(jobId, 15, 'generating', 'Generating voice over...');
         const audioBuffer = await generateSpeechBuffer(animationScript.voiceover.text);
-        if (VERBOSE_LOGGING)
-            console.log(`Generated voice over audio: ${audioBuffer.length} bytes`);
+        // console.log(`Generated voice over audio: ${audioBuffer.length} bytes`);
         wsManager.emitProgress(jobId, 40, 'generating', 'Voice over generated');
         // Generate animation video with Remotion
         wsManager.emitProgress(jobId, 50, 'generating', 'Generating animation video...');
         const videoBuffer = await generateIllustrationVideoWithRemotion(script, audioBuffer);
-        if (VERBOSE_LOGGING)
-            console.log(`Generated animation video: ${videoBuffer.length} bytes`);
+        // console.log(`Generated animation video: ${videoBuffer.length} bytes`);
         wsManager.emitProgress(jobId, 90, 'generating', 'Animation video generated');
         // Calculate duration in seconds
         const durationSec = Math.round(animationScript.totalDuration / 1000);
         // Store video in database
         const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
-        if (VERBOSE_LOGGING)
-            console.log('Stored animation video with voice over in database:', videoId);
+        // console.log('Stored animation video with voice over in database:', videoId);
         wsManager.emitProgress(jobId, 95, 'generating', 'Storing video in database...');
         // Update job status to completed
         await updateJobStatus(jobId, 'completed');
@@ -135,8 +130,7 @@ const generateAnimationHandler = async (req, res) => {
             res.status(400).json({ error: 'Missing walletAddress in request body' });
             return;
         }
-        if (VERBOSE_LOGGING)
-            console.log('weaveit-generator: Processing animation request:', { walletAddress, scriptLength: script.length });
+        // console.log('weaveit-generator: Processing animation request:', { walletAddress, scriptLength: script.length });
         // Check credit balance (animation with voice over costs 3 credits)
         const ANIMATION_COST = 2;
         const newBalance = await deductUserPoints(walletAddress, ANIMATION_COST);
@@ -150,12 +144,10 @@ const generateAnimationHandler = async (req, res) => {
         }
         // Generate title automatically based on script content (simple version)
         const title = script.split(' ').slice(0, 5).join(' ') + '...';
-        if (VERBOSE_LOGGING)
-            console.log('Generated title:', title);
+        // console.log('Generated title:', title);
         // Create job in database with job_type = 'animation'
         jobId = await createVideoJob(walletAddress, script, title, 'animation');
-        if (VERBOSE_LOGGING)
-            console.log('Created animation job:', jobId);
+        // console.log('Created animation job:', jobId);
         // Update status to generating
         await updateJobStatus(jobId, 'generating');
         // Respond immediately with job ID

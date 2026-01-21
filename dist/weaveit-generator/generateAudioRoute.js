@@ -44,7 +44,7 @@ async function sendWebhook(jobId, status, audioId, duration, error) {
             console.error(`Webhook failed: ${response.status} ${response.statusText}`);
         }
         else {
-            console.log(`✅ Webhook sent for job ${jobId}: ${status}`);
+            // console.log(`✅ Webhook sent for job ${jobId}: ${status}`);
         }
     }
     catch (err) {
@@ -54,26 +54,22 @@ async function sendWebhook(jobId, status, audioId, duration, error) {
 // Background processing function
 async function processAudioGeneration(jobId, walletAddress, script, explanation) {
     try {
-        if (VERBOSE_LOGGING)
-            console.log(`🚀 Starting background processing for audio job ${jobId}`);
+        // console.log(`🚀 Starting background processing for audio job ${jobId}`);
         // Emit initial progress
         wsManager.emitProgress(jobId, 0, 'generating', 'Starting audio generation...');
         // Generate speech buffer (no file saving)
         wsManager.emitProgress(jobId, 2, 'generating', 'Initializing audio generation...');
         wsManager.emitProgress(jobId, 5, 'generating', 'Generating audio narration...');
         const audioBuffer = await generateSpeechBuffer(explanation);
-        if (VERBOSE_LOGGING)
-            console.log(`Generated audio: ${audioBuffer.length} bytes`);
+        // console.log(`Generated audio: ${audioBuffer.length} bytes`);
         wsManager.emitProgress(jobId, 20, 'generating', 'Audio narration completed');
         // Calculate duration from audio buffer (in seconds)
         const durationSec = estimateAudioDuration(audioBuffer);
-        if (VERBOSE_LOGGING)
-            console.log(`Estimated duration: ${durationSec} seconds`);
+        // console.log(`Estimated duration: ${durationSec} seconds`);
         wsManager.emitProgress(jobId, 25, 'generating', 'Calculating audio duration...');
         // Store audio in database
         const audioId = await storeAudio(jobId, walletAddress, audioBuffer, durationSec);
-        if (VERBOSE_LOGGING)
-            console.log('Stored audio in database:', audioId);
+        // console.log('Stored audio in database:', audioId);
         wsManager.emitProgress(jobId, 30, 'generating', 'Storing audio in database...');
         // Update job status to completed
         await updateJobStatus(jobId, 'completed');
@@ -105,8 +101,7 @@ const generateAudioHandler = async (req, res) => {
             res.status(400).json({ error: 'Missing walletAddress in request body' });
             return;
         }
-        if (VERBOSE_LOGGING)
-            console.log('weaveit-generator: Processing audio-only request:', { walletAddress, scriptLength: script.length, hasPrompt: !!prompt });
+        // console.log('weaveit-generator: Processing audio-only request:', { walletAddress, scriptLength: script.length, hasPrompt: !!prompt });
         // Check credit balance before proceeding (audio costs 1 credit)
         const AUDIO_COST = 1;
         const newBalance = await deductUserPoints(walletAddress, AUDIO_COST);
@@ -120,12 +115,10 @@ const generateAudioHandler = async (req, res) => {
         }
         // Generate title automatically based on script content
         const title = await generateTitle(script);
-        if (VERBOSE_LOGGING)
-            console.log('Generated title:', title);
+        // console.log('Generated title:', title);
         // Create job in database with job_type = 'audio'
         jobId = await createVideoJob(walletAddress, script, title, 'audio');
-        if (VERBOSE_LOGGING)
-            console.log('Created audio job:', jobId);
+        // console.log('Created audio job:', jobId);
         // Update status to generating
         await updateJobStatus(jobId, 'generating');
         // Enhance the script for narration (use custom prompt if provided)

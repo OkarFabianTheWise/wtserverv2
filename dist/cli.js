@@ -5,7 +5,6 @@ import fs from 'fs';
 import path from 'path';
 import { analyzeCode } from './codeAnalyzer';
 import { generateSpeech } from './textToSpeech';
-import { generateVideo } from './videoGenerator';
 const program = new Command();
 program
     .name('aigen')
@@ -33,7 +32,8 @@ program
     }
     if (options.video) {
         const videoPath = filePath.replace(/\.[^.]+$/, '.mp4');
-        await generateVideo(result.tutorialText, audioPath, videoPath);
+        // Note: generateVideo would require implementation with AnimationScript type
+        console.log('Video generation requires API integration. Use the API instead.');
     }
 });
 program.parse();

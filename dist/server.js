@@ -65,9 +65,9 @@ app.get('/api/videos/:videoId', async (req, res) => {
             res.status(404).json({ error: 'Video not found' });
             return;
         }
-        console.log(`🎬 Serving video ${videoId}: ${videoBuffer.length} bytes`);
-        console.log(`🎬 First 20 bytes: ${videoBuffer.slice(0, 20).toString('hex')}`);
-        console.log(`🎬 Is MP4 header: ${videoBuffer.slice(4, 8).toString() === 'ftyp'}`);
+        // console.log(`🎬 Serving video ${videoId}: ${videoBuffer.length} bytes`);
+        // console.log(`🎬 First 20 bytes: ${videoBuffer.slice(0, 20).toString('hex')}`);
+        // console.log(`🎬 Is MP4 header: ${videoBuffer.slice(4, 8).toString() === 'ftyp'}`);
         // Set proper headers for video streaming
         res.setHeader('Content-Type', 'video/mp4');
         res.setHeader('Content-Length', videoBuffer.length);
@@ -105,6 +105,36 @@ app.get('/api/wallet/:walletAddress/videos', async (req, res) => {
     catch (err) {
         console.error('Error fetching wallet videos:', err);
         res.status(500).json({ error: 'Failed to retrieve videos' });
+    }
+});
+// Delete a video for a wallet address
+app.delete('/api/wallet/:walletAddress/videos/:videoId', async (req, res) => {
+    try {
+        const { walletAddress, videoId } = req.params;
+        // Verify the video belongs to this wallet
+        const videoBuffer = await getVideoByVideoId(videoId);
+        if (!videoBuffer) {
+            res.status(404).json({ error: 'Video not found' });
+            return;
+        }
+        // Verify ownership by checking wallet_address in database
+        const videoRecord = await pool.query('SELECT wallet_address FROM videos WHERE video_id = $1', [videoId]);
+        if (videoRecord.rows.length === 0) {
+            res.status(404).json({ error: 'Video not found' });
+            return;
+        }
+        if (videoRecord.rows[0].wallet_address !== walletAddress) {
+            res.status(403).json({ error: 'Unauthorized - video does not belong to this wallet' });
+            return;
+        }
+        // Delete the video
+        await pool.query('DELETE FROM videos WHERE video_id = $1', [videoId]);
+        console.log(`🗑️ Video ${videoId} deleted by ${walletAddress}`);
+        res.json({ success: true, message: 'Video deleted successfully' });
+    }
+    catch (err) {
+        console.error('Error deleting video:', err);
+        res.status(500).json({ error: 'Failed to delete video' });
     }
 });
 // Get all content (videos and audios) for a wallet address

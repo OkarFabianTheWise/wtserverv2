@@ -95,8 +95,7 @@ class WebSocketManager {
                 ws.send(messageStr);
             }
         });
-        if (VERBOSE_LOGGING)
-            console.log(`Emitted progress for job ${jobId}: ${progress}% - ${status}`);
+        // if (VERBOSE_LOGGING) console.log(`Emitted progress for job ${jobId}: ${progress}% - ${status}`);
     }
     // Method to emit completion
     emitCompleted(jobId, videoId, duration) {
