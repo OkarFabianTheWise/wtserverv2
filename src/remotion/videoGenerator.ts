@@ -13,7 +13,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { processCodeWithOpenAI, msToFrames } from './openaiProcessor';
+import { processCodeWithOpenAI, msToFrames } from './openaiProcessor.js';
 import type { AnimationScript } from './types';
 
 const execFileAsync = promisify(execFile);
