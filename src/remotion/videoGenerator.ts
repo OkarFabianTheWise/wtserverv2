@@ -407,26 +407,40 @@ export async function generateVideoWithSora(
         console.log('   Model: sora-2 (preset)');
         console.log('   Audio handling: Intelligent (Sora native + optional merge)');
 
-        // Initialize OpenAI client
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY || '',
-        });
+        const apiKey = process.env.OPENAI_API_KEY || '';
+        if (!apiKey) {
+            throw new Error('OPENAI_API_KEY environment variable is not set');
+        }
 
         // Create a prompt for Sora from the script/question
         const soraPrompt = generateSoraPrompt(scriptOrQuestion);
         console.log('🎨 Generated Sora prompt:', soraPrompt.substring(0, 150) + '...');
 
-        // Call Sora API to generate video (always 8 seconds, sora-2 model)
-        console.log('📹 Calling Sora API to create video job...');
-        const video = await (openai as any).videos.create({
-            model: 'sora-2', // Preset to sora-2
-            prompt: soraPrompt,
-            size: '1280x720', // Standard HD size
-            seconds: '8' as any, // Preset to 8 seconds
-        } as any);
+        // Call Sora API to generate video using proper FormData format
+        console.log('📹 Calling Sora API (OpenAI) to create video job...');
 
-        const videoId = (video as any).id;
-        const status = (video as any).status;
+        const formData = new FormData();
+        formData.append('model', 'sora-2');
+        formData.append('prompt', soraPrompt);
+        formData.append('size', '1280x720');
+        formData.append('seconds', '8');
+
+        const response = await fetch('https://api.openai.com/v1/videos', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
+        }
+
+        const result = await response.json();
+        const videoId = result.id;
+        const status = result.status;
 
         console.log('✅ Sora video job created');
         console.log('   Job ID:', videoId);

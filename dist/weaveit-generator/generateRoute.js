@@ -5,6 +5,7 @@ import { generateSpeechBuffer } from '../textToSpeech.js';
 import { generateScrollingScriptVideoBuffer } from '../videoGenerator.js';
 import { setupRemotionV2 } from '../remotion/openaiProcessor.js';
 import { renderAnimationScriptToVideo } from '../remotion/videoGenerator.js';
+import { generateVideoWithSora } from '../remotion/videoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
 import { wsManager } from '../websocket.js';
 const router = express.Router();
@@ -60,51 +61,69 @@ async function processVideoGeneration(jobId, walletAddress, script, voiceoverTex
         // if (VERBOSE_LOGGING) console.log(`🚀 Starting background processing for job ${jobId} using ${renderVersion}`);
         // Emit initial progress
         wsManager.emitProgress(jobId, 0, 'generating', 'Generating...');
-        // ===== AUDIO GENERATION PHASE =====
-        // Generate speech buffer from voiceover text
-        wsManager.emitProgress(jobId, 2, 'generating', 'Generating...');
-        wsManager.emitProgress(jobId, 5, 'generating', 'Generating...');
-        const audioBuffer = await generateSpeechBuffer(voiceoverText);
-        // if (VERBOSE_LOGGING) console.log(`Generated audio: ${audioBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 15, 'generating', 'Generating...');
         let videoBuffer;
-        // ===== VIDEO RENDERING PHASE =====
-        // Choose rendering engine based on version
-        if (renderVersion === 'v2') {
-            // For v2, animationScript is pre-processed in setup phase
-            wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
-            wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
-            if (animationScriptData) {
-                // Use pre-processed AnimationScript from setup phase
-                // This merges the rendered animation with the audio
-                videoBuffer = await renderAnimationScriptToVideo(animationScriptData, audioBuffer);
-            }
-            else {
-                // Fallback: shouldn't happen in v2, but keep for safety
-                throw new Error('AnimationScript not provided for v2 rendering');
-            }
-            wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+        let durationSec;
+        let audioBuffer;
+        if (renderVersion === 'v3') {
+            // ===== SORA V3 GENERATION =====
+            wsManager.emitProgress(jobId, 5, 'generating', 'Sora API: Creating video job...');
+            // Generate Sora video (already includes native audio)
+            const soraJobId = await generateVideoWithSora(voiceoverText);
+            wsManager.emitProgress(jobId, 50, 'generating', 'Sora API: Waiting for video...');
+            // Note: In production, you'd use webhooks to get notified when Sora completes
+            // For now, this returns immediately with soraJobId
+            // The actual video download happens via another endpoint
+            // Since Sora is async, we'll emit a queued status and let webhook handle completion
+            wsManager.emitProgress(jobId, 100, 'queued', 'Video queued with Sora API');
+            await sendWebhook(jobId, 'queued', undefined, undefined);
+            return;
         }
         else {
-            // v1 rendering
-            wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
-            wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
-            videoBuffer = await generateScrollingScriptVideoBuffer(script, audioBuffer);
-            wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+            // ===== AUDIO GENERATION PHASE (V1 & V2) =====
+            // Generate speech buffer from voiceover text
+            wsManager.emitProgress(jobId, 2, 'generating', 'Generating...');
+            wsManager.emitProgress(jobId, 5, 'generating', 'Generating...');
+            audioBuffer = await generateSpeechBuffer(voiceoverText);
+            // if (VERBOSE_LOGGING) console.log(`Generated audio: ${audioBuffer.length} bytes`);
+            wsManager.emitProgress(jobId, 15, 'generating', 'Generating...');
+            // ===== VIDEO RENDERING PHASE =====
+            // Choose rendering engine based on version
+            if (renderVersion === 'v2') {
+                // For v2, animationScript is pre-processed in setup phase
+                wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
+                wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
+                if (animationScriptData) {
+                    // Use pre-processed AnimationScript from setup phase
+                    // This merges the rendered animation with the audio
+                    videoBuffer = await renderAnimationScriptToVideo(animationScriptData, audioBuffer);
+                }
+                else {
+                    // Fallback: shouldn't happen in v2, but keep for safety
+                    throw new Error('AnimationScript not provided for v2 rendering');
+                }
+                wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+            }
+            else {
+                // v1 rendering
+                wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
+                wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
+                videoBuffer = await generateScrollingScriptVideoBuffer(script, audioBuffer);
+                wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
+            }
+            // if (VERBOSE_LOGGING) console.log(`Generated video: ${videoBuffer.length} bytes`);
+            // ===== VIDEO STORAGE PHASE =====
+            // Calculate duration from audio buffer (in seconds)
+            durationSec = estimateAudioDuration(audioBuffer);
+            // if (VERBOSE_LOGGING) console.log(`Estimated duration: ${durationSec} seconds`);
+            wsManager.emitProgress(jobId, 45, 'generating', 'Storing...');
+            // Store video in database
+            const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
+            // if (VERBOSE_LOGGING) console.log('Stored video in database:', videoId);
+            wsManager.emitProgress(jobId, 75, 'generating', 'Storing...');
+            await sendWebhook(jobId, 'completed', videoId, durationSec);
+            // Emit completion
+            wsManager.emitCompleted(jobId, videoId, durationSec);
         }
-        // if (VERBOSE_LOGGING) console.log(`Generated video: ${videoBuffer.length} bytes`);
-        // ===== VIDEO STORAGE PHASE =====
-        // Calculate duration from audio buffer (in seconds)
-        const durationSec = estimateAudioDuration(audioBuffer);
-        // if (VERBOSE_LOGGING) console.log(`Estimated duration: ${durationSec} seconds`);
-        wsManager.emitProgress(jobId, 45, 'generating', 'Storing...');
-        // Store video in database
-        const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
-        // if (VERBOSE_LOGGING) console.log('Stored video in database:', videoId);
-        wsManager.emitProgress(jobId, 75, 'generating', 'Storing...');
-        await sendWebhook(jobId, 'completed', videoId, durationSec);
-        // Emit completion
-        wsManager.emitCompleted(jobId, videoId, durationSec);
     }
     catch (error) {
         if (VERBOSE_LOGGING)
@@ -122,8 +141,8 @@ const generateHandler = async (req, res) => {
         let { walletAddress, script, prompt } = req.body;
         const renderVersion = req.query.renderVersion || 'v2'; // Default to v2
         // Validate render version
-        if (!['v1', 'v2'].includes(renderVersion)) {
-            res.status(400).json({ error: 'Invalid renderVersion. Use v1 or v2' });
+        if (!['v1', 'v2', 'v3'].includes(renderVersion)) {
+            res.status(400).json({ error: 'Invalid renderVersion. Use v1, v2, or v3' });
             return;
         }
         if (!script || typeof script !== 'string' || script.trim() === '') {
@@ -166,6 +185,13 @@ const generateHandler = async (req, res) => {
             console.log(JSON.stringify(animationScript, null, 2));
             console.log('===== END RESPONSE =====\n');
             console.log('✅ Remotion v2 setup complete');
+        }
+        else if (renderVersion === 'v3') {
+            // V3: Sora video generation - minimal setup
+            console.log('🚀 Setting up Sora v3 for script...');
+            title = script.substring(0, 50) + (script.length > 50 ? '...' : '');
+            explanation = script; // Pass the entire script to Sora
+            console.log('✅ Sora v3 setup complete');
         }
         else {
             // V1: Use old approach

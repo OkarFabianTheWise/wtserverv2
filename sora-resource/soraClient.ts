@@ -222,8 +222,8 @@ async function example() {
     }
 }
 
-// Run example if this file is executed directly
-if (require.main === module) {
+// Run example if this file is executed directly (ES module equivalent)
+if (import.meta.url === `file://${process.argv[1]}`) {
     example().catch(console.error);
 }
 
