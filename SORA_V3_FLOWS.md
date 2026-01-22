@@ -109,27 +109,88 @@ POST /api/generate?renderVersion=v3
 
 ---
 
-## All-In-One Flow - Blocking
+## Recommended: Webhook + WebSocket Flow
+
+```
+┌────────────────────────────────────────────────┐
+│ Client: POST /api/generate?renderVersion=v3   │
+└─────────────────────────┬──────────────────────┘
+                          │
+                          ▼ Returns jobId immediately
+                   { jobId: "v123" }
+                          │
+         ┌────────────────┴────────────────┐
+         │                                 │
+         ▼                                 ▼
+    UI subscribes          OpenAI processes
+    to WebSocket           in background
+         │                        │
+         │                        │ (takes 2-5 mins)
+         │                        │
+         │                        ▼
+         │                 Job completes
+         │                        │
+         │         ┌──────────────┘
+         │         │
+         │         ▼
+         │   POST /api/webhook/video-events
+         │         │
+         │         ▼
+         │   Server notifies UI
+         │         │
+         │         ▼
+         └──────▶ WebSocket event
+                        │
+                        ▼
+            GET /api/download?jobId=v123
+                        │
+                        ▼
+                  MP4 video file
+```
+
+✅ **Benefits:**
+- Immediate response (no blocking)
+- Real-time notifications via webhook
+- Automatic retry on failures (72 hours)
+- Scalable architecture
+- No polling needed
+
+See [SORA_V3_WEBHOOK_SETUP.md](SORA_V3_WEBHOOK_SETUP.md) for full implementation.
+
+---
+
+## Polling Flow (Fallback)
 
 ```
 ┌─────────────────────────────────────┐
-│ generateAndDownloadSoraVideo(q, a?) │
-│                                     │
-│ 1. Create job                       │
-│ 2. Poll until complete (blocking)   │
-│ 3. Download video                   │
-│ 4. Merge audio if provided          │
-│ 5. Return buffer                    │
-│                                     │
-│ ⏱️  Takes: 2-5 minutes              │
-└─────────────────────────────────────┘
-           │
-           ▼
-  Returns: Buffer
-           │
-           ▼
-  Save to file or stream
+│ 1. POST /generate?renderVersion=v3  │
+│    Returns: jobId                   │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+          ┌────────────────────┐
+          │ Loop every 5 secs: │
+          │                    │
+          │ GET /status?jobId  │
+          │                    │
+          │ status check:      │
+          │ - queued           │
+          │ - in_progress      │
+          │ - completed        │
+          └────────┬───────────┘
+                   │
+                   ├─ Not ready? Sleep 5s, retry
+                   │
+                   └─ Ready? Download
+                        │
+                        ▼
+        GET /api/download?jobId
+                        │
+                        ▼
+                  MP4 video file
 ```
+
+⚠️ **Use only if webhooks unavailable**
 
 ---
 
@@ -235,6 +296,7 @@ Final (when ready):
 
 Download:
 GET /api/download?jobId=:jobId&renderVersion=v3 → MP4 File
+- **Webhook** for real-time event notifications instead of polling
 ```
 
 ---

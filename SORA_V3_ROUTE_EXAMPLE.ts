@@ -76,7 +76,7 @@ router.post('/generate', async (req: Request, res: Response) => {
  * Check status of a video generation job (v3 only)
  * 
  * Returns: { id, status, progress, url? }
- */
+*/
 router.get('/status', async (req: Request, res: Response) => {
     const renderVersion = req.query.renderVersion || 'v2';
     const jobId = req.query.jobId as string;
@@ -145,50 +145,66 @@ router.get('/download', async (req: Request, res: Response) => {
 });
 
 /**
- * ALTERNATIVE: POST /api/generate?renderVersion=v3&complete=true
- * One-call workflow: generate → poll → download (v3 only)
+ * POST /api/webhook/video-events?webhookSecret=:secret
+ * Webhook endpoint to receive Sora video generation events (v3 only)
  * 
- * This is an alternative to the streaming endpoints above.
- * Use this if you need a single synchronous call.
+ * Receives events from OpenAI Sora API when jobs complete or fail
+ * Signature verification recommended for security
  * 
- * Body:
- * {
- *   scriptOrQuestion: string,
- *   audioBuffer?: Buffer (optional)
- * }
- * 
- * Returns: MP4 video file
- * 
- * Note: This endpoint blocks until video is ready (up to 10 minutes)
- * For better UX, use the streaming pattern above instead.
- * 
- * IMPLEMENTATION EXAMPLE:
- * 
- * if (renderVersion === 'v3' && complete) {
- *     try {
- *         const { scriptOrQuestion, audioBuffer } = req.body;
- *         
- *         if (!scriptOrQuestion || typeof scriptOrQuestion !== 'string') {
- *             return res.status(400).json({ error: 'scriptOrQuestion is required' });
- *         }
- *         
- *         console.log('🎬 Starting complete video generation...');
- *         const videoBuffer = await generateAndDownloadSoraVideo(scriptOrQuestion, audioBuffer);
- *         
- *         // Send as MP4 file
- *         res.setHeader('Content-Type', 'video/mp4');
- *         res.setHeader('Content-Disposition', 'attachment; filename="video.mp4"');
- *         res.send(videoBuffer);
- *     } catch (error: any) {
- *         console.error('❌ Error in generate-and-download:', error);
- *         res.status(500).json({ error: error.message });
- *     }
- *     return;
- * }
- * 
- * // Handle other renderVersion values (v1, v2, etc.)
- * // ... rest of handler for non-v3 versions
+ * Event types:
+ * - video.completed: Video successfully generated
+ * - video.failed: Video generation failed
  */
+router.post('/webhook/video-events', async (req: Request, res: Response) => {
+    try {
+        // Optional: Verify webhook signature using OpenAI SDK
+        // const event = await openai.webhooks.unwrap(req.body, req.headers, {
+        //     secret: process.env.OPENAI_WEBHOOK_SECRET
+        // });
+
+        const event = req.body;
+        const jobId = event.data?.id;
+
+        if (!jobId) {
+            return res.status(400).json({ error: 'Missing job ID in webhook' });
+        }
+
+        console.log(`🔔 Webhook event: ${event.type} for job ${jobId}`);
+
+        if (event.type === 'video.completed') {
+            // Notify UI via websocket
+            webSocketManager.emitProgress(
+                jobId,
+                100,
+                'completed',
+                'Video generation completed via webhook',
+                { readyForDownload: true, completedAt: new Date() }
+            );
+
+            // Optional: Store completion metadata in database
+            // await db.updateJob(jobId, { status: 'completed' });
+        } else if (event.type === 'video.failed') {
+            webSocketManager.emitProgress(
+                jobId,
+                0,
+                'failed',
+                'Video generation failed',
+                { error: event.data?.error || 'Unknown error', failedAt: new Date() }
+            );
+
+            // Optional: Log failure
+            // await db.updateJob(jobId, { status: 'failed', error: event.data?.error });
+        }
+
+        // Always respond quickly with 2xx to acknowledge receipt
+        // OpenAI will retry on any non-2xx or timeout
+        res.status(200).json({ received: true });
+    } catch (error: any) {
+        console.error('❌ Webhook processing error:', error);
+        // Still respond with 2xx to avoid retries on our processing errors
+        res.status(200).json({ received: true, error: error.message });
+    }
+});
 
 /**
  * Background polling function
@@ -266,10 +282,25 @@ export default router;
 /**
  * Usage Examples for UI
  * 
- * 1. Streaming Mode (Recommended)
+ * RECOMMENDED: Webhook + WebSocket Pattern
+ * =========================================
+ * 1. UI calls POST /api/generate?renderVersion=v3 to create job
+ * 2. Server registers webhook with OpenAI to be notified when complete
+ * 3. OpenAI calls your /webhook/video-events when job finishes
+ * 4. Webhook handler emits websocket event to UI in real-time
+ * 5. UI downloads via GET /api/download?jobId=X&renderVersion=v3
+ * 
+ * Benefits:
+ * - No polling needed
+ * - Real-time updates via websocket
+ * - Handles network failures gracefully
+ * - OpenAI retries failed webhooks for 72 hours
+ * - Webhook is the standard pattern for async operations
+ * 
+ * Implementation:
  * ```typescript
- * // Request
- * const response = await fetch('/api/v3/generate-video', {
+ * // 1. Request video generation
+ * const response = await fetch('/api/generate?renderVersion=v3', {
  *   method: 'POST',
  *   body: JSON.stringify({
  *     scriptOrQuestion: "Explain binary search",
@@ -278,38 +309,47 @@ export default router;
  * });
  * const { jobId } = await response.json();
  * 
- * // Subscribe to updates
+ * // 2. Subscribe to live updates via websocket
  * ws.send(JSON.stringify({ action: 'subscribe', jobId }));
  * 
- * // Listen for progress
+ * // 3. Listen for webhook-triggered progress events
  * ws.on('message', (data) => {
  *   const msg = JSON.parse(data);
  *   if (msg.jobId === jobId) {
- *     updateProgressBar(msg.progress);
  *     if (msg.status === 'completed') {
+ *       // Webhook fired! Download the video
  *       downloadVideo(jobId);
+ *     } else if (msg.status === 'failed') {
+ *       showError(msg.message);
  *     }
  *   }
  * });
+ * 
+ * // 4. Download when ready
+ * const videoBlob = await fetch(
+ *   `/api/download?jobId=${jobId}&renderVersion=v3`
+ * ).then(r => r.blob());
  * ```
  * 
- * 2. Simple Download After Ready
- * ```typescript
- * // After video is completed (check status first)
- * const videoBlob = await fetch(`/api/v3/download/${jobId}`).then(r => r.blob());
- * const url = URL.createObjectURL(videoBlob);
- * // Display or download
- * ```
+ * ALTERNATIVE: Polling Pattern (if webhooks unavailable)
+ * ======================================================
+ * If you cannot receive webhooks, poll the status endpoint:
  * 
- * 3. Synchronous (Blocking)
  * ```typescript
- * // One call returns the video (up to 10 minute wait)
- * const videoBlob = await fetch('/api/v3/generate-and-download', {
- *   method: 'POST',
- *   body: JSON.stringify({
- *     scriptOrQuestion: "Make a tutorial video",
- *     audioBuffer: narration
- *   })
- * }).then(r => r.blob());
+ * const jobId = await startVideoGeneration(...);
+ * 
+ * // Poll every 5 seconds
+ * const pollInterval = setInterval(async () => {
+ *   const status = await fetch(
+ *     `/api/status?jobId=${jobId}&renderVersion=v3`
+ *   ).then(r => r.json());
+ *   
+ *   updateUI(status);
+ *   
+ *   if (status.status === 'completed') {
+ *     clearInterval(pollInterval);
+ *     downloadVideo(jobId);
+ *   }
+ * }, 5000);
  * ```
  */

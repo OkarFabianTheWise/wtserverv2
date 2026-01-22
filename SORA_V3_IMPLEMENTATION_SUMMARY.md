@@ -107,7 +107,7 @@ generateAndDownloadSoraVideo(question: string, audio?: Buffer): Promise<Buffer>
 POST   /api/generate?renderVersion=v3
 GET    /api/status?jobId=:jobId&renderVersion=v3
 GET    /api/download?jobId=:jobId&renderVersion=v3
-POST   /api/generate?renderVersion=v3&complete=true
+POST   /api/webhook/video-events
 ```
 
 See `SORA_V3_ROUTE_EXAMPLE.ts` for implementation!

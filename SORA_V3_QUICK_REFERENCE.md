@@ -28,14 +28,15 @@ After:  { scriptOrQuestion, audio? }
 // 1. Create job (returns immediately)
 const jobId = await generateVideoWithSora(question, audio?);
 
-// 2. Check status (for polling)
+// 2. Check status (for polling fallback)
 const { status, progress } = await getSoraVideoStatus(jobId);
 
 // 3. Download when ready
 const video = await downloadSoraVideo(jobId, audio?);
 
-// 4. All-in-one (blocking)
-const video = await generateAndDownloadSoraVideo(question, audio?);
+// RECOMMENDED: Use webhooks instead!
+// Register webhook in OpenAI dashboard for real-time notifications
+// See SORA_V3_WEBHOOK_SETUP.md for details
 ```
 
 ---
@@ -174,9 +175,9 @@ try {
 
 ```
 POST   /api/generate?renderVersion=v3                    Create job
-GET    /api/status?jobId=:id&renderVersion=v3           Check status
+GET    /api/status?jobId=:id&renderVersion=v3           Check status (polling fallback)
 GET    /api/download?jobId=:id&renderVersion=v3         Download video
-POST   /api/generate?renderVersion=v3&complete=true     All-in-one
+POST   /api/webhook/video-events                         Webhook for real-time events
 ```
 
 ---

@@ -133,17 +133,24 @@ Benefits:
 - Works well with long operations
 ```
 
-### Pattern 2: Polling Status
+### Pattern 2: Webhooks (Recommended)
+```
+UI → POST /generate → Get jobId (returns immediately)
+   → Subscribe to WebSocket for updates
+   → OpenAI calls webhook when done
+   → Server broadcasts to UI via WebSocket
+   → UI: GET /download/:jobId to retrieve video
+```
+
+See [SORA_V3_WEBHOOK_SETUP.md](SORA_V3_WEBHOOK_SETUP.md) for setup instructions.
+
+### Pattern 3: Polling Status (Fallback)
 ```
 UI → POST /generate → Get jobId
    → Loop: GET /status/:jobId every 5s
    → When complete: GET /download/:jobId
-```
-
-### Pattern 3: Synchronous (Blocking)
-```
-UI → POST /generate-and-download → Wait for video
-Returns video directly after generation completes
+   
+Use only if webhooks are unavailable in your environment
 ```
 
 ---
@@ -226,6 +233,13 @@ GET /api/status?jobId=:jobId&renderVersion=v3
 ```
 GET /api/download?jobId=:jobId&renderVersion=v3
 → MP4 video file (application/octet-stream)
+```
+
+### Webhook Events (Recommended)
+```
+POST /api/webhook/video-events
+OpenAI sends real-time job completion events
+→ { "type": "video.completed|video.failed", "data": { "id": "jobId" } }
 ```
 
 ---

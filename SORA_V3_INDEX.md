@@ -9,27 +9,32 @@
    - Key functions at a glance
    - Common patterns
 
-2. **[SORA_V3_SIMPLE.md](SORA_V3_SIMPLE.md)** (5 min)
+2. **[SORA_V3_WEBHOOK_SETUP.md](SORA_V3_WEBHOOK_SETUP.md)** (10 min) ⭐ **NEW**
+   - Webhook vs blocking endpoints
+   - OpenAI webhook registration
+   - Real-time notification setup
+
+3. **[SORA_V3_SIMPLE.md](SORA_V3_SIMPLE.md)** (5 min)
    - UI integration guide
    - Request/response examples
    - Websocket patterns
 
-3. **[SORA_V3_ROUTE_EXAMPLE.ts](SORA_V3_ROUTE_EXAMPLE.ts)** (10 min)
+4. **[SORA_V3_ROUTE_EXAMPLE.ts](SORA_V3_ROUTE_EXAMPLE.ts)** (10 min)
    - Ready-to-use Express routes
    - Copy-paste implementation
    - Full working examples
 
-4. **[SORA_V3_FLOWS.md](SORA_V3_FLOWS.md)** (5 min)
+5. **[SORA_V3_FLOWS.md](SORA_V3_FLOWS.md)** (5 min)
    - Visual flow diagrams
    - Data flow visualization
    - Timeline examples
 
-5. **[SORA_V3_PRESET_CONFIG.md](SORA_V3_PRESET_CONFIG.md)** (5 min)
+6. **[SORA_V3_PRESET_CONFIG.md](SORA_V3_PRESET_CONFIG.md)** (5 min)
    - Philosophy behind presets
    - Migration guide
    - Detailed comparison
 
-6. **[SORA_V3_IMPLEMENTATION_SUMMARY.md](SORA_V3_IMPLEMENTATION_SUMMARY.md)** (3 min)
+7. **[SORA_V3_IMPLEMENTATION_SUMMARY.md](SORA_V3_IMPLEMENTATION_SUMMARY.md)** (3 min)
    - What was changed
    - Before/after comparison
    - Testing checklist
@@ -41,8 +46,8 @@
 ### "I'm a Frontend Developer"
 → Read: SORA_V3_SIMPLE.md, SORA_V3_QUICK_REFERENCE.md
 
-### "I'm a Backend Developer"
-→ Read: SORA_V3_ROUTE_EXAMPLE.ts, SORA_V3_PRESET_CONFIG.md
+### "I'm a Backend Developer (Setting up Webhooks)"
+→ Read: SORA_V3_WEBHOOK_SETUP.md, SORA_V3_ROUTE_EXAMPLE.ts, SORA_V3_PRESET_CONFIG.md
 
 ### "I want to understand the architecture"
 → Read: SORA_V3_FLOWS.md, SORA_V3_IMPLEMENTATION_SUMMARY.md
@@ -157,9 +162,9 @@ Total: ~62 minutes
 
 ### API Endpoints
 - `POST /api/generate?renderVersion=v3` - Create job
-- `GET /api/status?jobId=:jobId&renderVersion=v3` - Check status
+- `GET /api/status?jobId=:jobId&renderVersion=v3` - Check status (polling fallback)
 - `GET /api/download?jobId=:jobId&renderVersion=v3` - Download video
-- `POST /api/generate?renderVersion=v3&complete=true` - All-in-one
+- `POST /api/webhook/video-events` - Webhook for real-time event notifications
 
 ### Presets (Locked)
 - Model: `sora-2`
