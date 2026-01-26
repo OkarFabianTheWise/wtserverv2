@@ -267,6 +267,11 @@ async function downloadAndSaveVideo(jobId, soraJobId, walletAddress) {
             try {
                 const videoId = await storeVideo(jobId, walletAddress, videoBuffer, undefined, 'mp4');
                 console.log(`✅ Video metadata stored in videos table: ${videoId}`);
+                // Emit completion signal to WebSocket clients
+                if (webSocketManager) {
+                    console.log(`📡 Emitting completion to WebSocket for job ${jobId}`);
+                    webSocketManager.emitCompleted(jobId, videoId, undefined);
+                }
             }
             catch (err) {
                 console.error(`❌ Failed to create videos table entry for job ${jobId}:`, err instanceof Error ? err.message : err);
