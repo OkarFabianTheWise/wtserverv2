@@ -1,9 +1,11 @@
+// import { generateIllustrationVideoWithRemotion } from './remotionVideoGenerator.js';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { createCanvas } from 'canvas';
+// import { saveScrollImage, saveScrollVideo } from './db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ffmpegPath = "/usr/bin/ffmpeg";
 const ffprobePath = "/usr/bin/ffprobe";

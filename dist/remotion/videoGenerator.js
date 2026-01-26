@@ -363,7 +363,7 @@ export async function generateVideoWithSora(scriptOrQuestion, audioBuffer) {
         formData.append('model', 'sora-2');
         formData.append('prompt', soraPrompt);
         formData.append('size', '1280x720');
-        formData.append('seconds', '8');
+        formData.append('seconds', '10');
         const response = await fetch('https://api.openai.com/v1/videos', {
             method: 'POST',
             headers: {
@@ -573,7 +573,7 @@ export async function generateAndDownloadSoraVideo(scriptOrQuestion, audioBuffer
  */
 function generateSoraPrompt(scriptOrQuestion) {
     // Limit prompt length for Sora (typically 1000 chars max)
-    const maxLength = 1000;
+    const maxLength = 900; // Leave room for duration instruction
     let prompt = scriptOrQuestion.trim();
     if (prompt.length > maxLength) {
         prompt = prompt.substring(0, maxLength);
@@ -582,13 +582,15 @@ function generateSoraPrompt(scriptOrQuestion) {
             prompt = prompt.substring(0, lastSpace);
         }
     }
+    // Add system character for duration guidance
+    let systemPrompt = `[Duration: Keep the video between 8-10 seconds. Provide a clear, concise explanation that fits within this timeframe.] `;
     // Enhance prompt with visual descriptors if it seems like a technical script
     if (scriptOrQuestion.toLowerCase().includes('code') ||
         scriptOrQuestion.toLowerCase().includes('function') ||
         scriptOrQuestion.toLowerCase().includes('algorithm')) {
         prompt = `Create an educational video showing: ${prompt}. Use clear visual explanations, diagrams, and animations to illustrate concepts. Professional quality, 16:9 aspect ratio.`;
     }
-    return prompt;
+    return systemPrompt + prompt;
 }
 /**
  * Legacy function for backward compatibility

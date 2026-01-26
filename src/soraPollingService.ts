@@ -23,8 +23,8 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-webhook-secret';
 
 // Polling interval (seconds) - starts at 5s, increases with job age
 const INITIAL_POLL_INTERVAL = 5000; // 5 seconds
-const MAX_POLL_INTERVAL = 30000; // 30 seconds
-const POLL_BACKOFF_MULTIPLIER = 1.5; // Increase interval by 50% each cycle
+// const MAX_POLL_INTERVAL = 30000; // 30 seconds
+// const POLL_BACKOFF_MULTIPLIER = 1.5; // Increase interval by 50% each cycle
 
 interface PendingSoraJob {
     job_id: string;

@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { analyzeCode } from './codeAnalyzer';
 import { generateSpeech } from './textToSpeech';
-import { renderAnimationScriptToVideo } from './remotion/videoGenerator';
+// import { renderAnimationScriptToVideo } from './remotion/videoGenerator';
 
 const program = new Command();
 
