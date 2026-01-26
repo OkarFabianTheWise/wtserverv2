@@ -484,51 +484,29 @@ app.post('/api/webhooks/job-update', async (req, res) => {
 
     // Handle Sora v3 video completion
     // The soraPollingService has already downloaded and stored to video_jobs.video_buffer
-    // We need to move it to the videos table
+    // and created the videos table entry. We just need to broadcast the completion.
     if (isSoraJob && status === 'completed') {
       console.log(`📥 Processing Sora video for job ${jobId}`);
       try {
-        // Get wallet and video buffer from video_jobs
-        const result = await pool.query(
-          'SELECT wallet_address, video_buffer, video_size FROM video_jobs WHERE job_id = $1',
+        // Get the video entry that soraPollingService should have created
+        const videoResult = await pool.query(
+          'SELECT video_id FROM videos WHERE job_id = $1 LIMIT 1',
           [jobId]
         );
 
-        if (result.rows.length > 0) {
-          const { wallet_address: walletAddress, video_buffer: videoBuffer, video_size: videoSize } = result.rows[0];
-
-          // Only store if we have a video buffer
-          if (videoBuffer && videoBuffer.length > 0) {
-            console.log(`[webhook] Calling storeVideo with jobId=${jobId}, wallet=${walletAddress}, bufferSize=${videoSize}`);
-
-            try {
-              // Store video in database and get the video_id
-              const dbVideoId = await storeVideo(jobId, walletAddress, videoBuffer, parseInt(duration?.toString() || '0'));
-              console.log(`✅ Sora video saved to database for job ${jobId} with video_id: ${dbVideoId} (${(videoSize / 1024 / 1024).toFixed(2)} MB)`);
-
-              // Broadcast completion with the database video ID so frontend can fetch it
-              webSocketManager.emitCompleted(jobId, dbVideoId, parseInt(duration?.toString() || '0'));
-            } catch (storeErr) {
-              const errorMsg = storeErr instanceof Error ? storeErr.message : String(storeErr);
-              console.error(`[webhook] storeVideo failed for job ${jobId}:`, errorMsg);
-              console.error(`[webhook] Full error:`, storeErr);
-              webSocketManager.emitError(jobId, `Failed to store video: ${errorMsg}`);
-            }
-          } else {
-            console.warn(`⚠️  No video buffer found for job ${jobId}`);
-            webSocketManager.emitError(jobId, 'Video not found in buffer');
-          }
+        if (videoResult.rows.length > 0) {
+          const dbVideoId = videoResult.rows[0].video_id;
+          console.log(`✅ Sora video found in database for job ${jobId}: ${dbVideoId}`);
+          webSocketManager.emitCompleted(jobId, dbVideoId, parseInt(duration?.toString() || '0'));
         } else {
-          console.warn(`⚠️  Job ${jobId} not found in video_jobs`);
-          webSocketManager.emitError(jobId, 'Job not found');
+          // Video entry not yet created - soraPollingService might still be processing
+          console.warn(`⚠️  Video entry not found for job ${jobId} yet - still processing`);
+          // Don't emit error - soraPollingService will handle it
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error(`❌ Failed to process Sora video:`, errorMsg);
-        console.error(`❌ Full error:`, err);
-        // Broadcast error to WebSocket
-        webSocketManager.emitError(jobId, 'Failed to process video');
-        // Don't fail the webhook - continue with status update
+        // Don't fail the webhook - soraPollingService is the source of truth
       }
     } else if (!isSoraJob && status === 'completed' && videoId) {
       // For v1/v2 jobs, the videoId is already the database video ID
