@@ -140,4 +140,5 @@ class WebSocketManager {
     }
 }
 export const wsManager = new WebSocketManager();
+export const webSocketManager = wsManager; // Alias for consistency
 //# sourceMappingURL=websocket.js.map

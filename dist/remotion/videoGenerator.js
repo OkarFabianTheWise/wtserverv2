@@ -350,23 +350,34 @@ export async function generateVideoWithSora(scriptOrQuestion, audioBuffer) {
         console.log('📝 Input length:', scriptOrQuestion.length, 'characters');
         console.log('   Model: sora-2 (preset)');
         console.log('   Audio handling: Intelligent (Sora native + optional merge)');
-        // Initialize OpenAI client
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY || '',
-        });
+        const apiKey = process.env.OPENAI_API_KEY || '';
+        if (!apiKey) {
+            throw new Error('OPENAI_API_KEY environment variable is not set');
+        }
         // Create a prompt for Sora from the script/question
         const soraPrompt = generateSoraPrompt(scriptOrQuestion);
         console.log('🎨 Generated Sora prompt:', soraPrompt.substring(0, 150) + '...');
-        // Call Sora API to generate video (always 8 seconds, sora-2 model)
-        console.log('📹 Calling Sora API to create video job...');
-        const video = await openai.videos.create({
-            model: 'sora-2', // Preset to sora-2
-            prompt: soraPrompt,
-            size: '1280x720', // Standard HD size
-            seconds: '8', // Preset to 8 seconds
+        // Call Sora API to generate video using proper FormData format
+        console.log('📹 Calling Sora API (OpenAI) to create video job...');
+        const formData = new FormData();
+        formData.append('model', 'sora-2');
+        formData.append('prompt', soraPrompt);
+        formData.append('size', '1280x720');
+        formData.append('seconds', '8');
+        const response = await fetch('https://api.openai.com/v1/videos', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+            },
+            body: formData,
         });
-        const videoId = video.id;
-        const status = video.status;
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
+        }
+        const result = await response.json();
+        const videoId = result.id;
+        const status = result.status;
         console.log('✅ Sora video job created');
         console.log('   Job ID:', videoId);
         console.log('   Status:', status);
@@ -428,12 +439,25 @@ export async function downloadSoraVideo(videoId, audioBuffer) {
     const audioPath = audioBuffer ? path.join(tempDir, `${tempId}.mp3`) : null;
     const finalVideoPath = audioBuffer ? path.join(tempDir, `${tempId}_final.mp4`) : videoPath;
     try {
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY || '',
-        });
+        const openaiApiKey = process.env.OPENAI_API_KEY || '';
+        if (!openaiApiKey) {
+            throw new Error('OPENAI_API_KEY environment variable is not set');
+        }
         console.log('📥 Downloading Sora video...');
-        const content = await openai.videos.downloadContent(videoId, 'video');
-        const videoBuffer = Buffer.from(await content.arrayBuffer());
+        console.log(`   Video ID: ${videoId}`);
+        // Use HTTP API to download the file directly
+        // OpenAI Files API: GET /v1/files/{file_id}/content
+        const fileUrl = `https://api.openai.com/v1/files/${videoId}/content`;
+        const response = await fetch(fileUrl, {
+            headers: {
+                'Authorization': `Bearer ${openaiApiKey}`
+            }
+        });
+        if (!response.ok) {
+            throw new Error(`OpenAI API returned ${response.status}: ${response.statusText}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const videoBuffer = Buffer.from(arrayBuffer);
         console.log(`✅ Downloaded video: ${videoBuffer.length} bytes`);
         // Write video to temp file
         fs.writeFileSync(videoPath, videoBuffer);

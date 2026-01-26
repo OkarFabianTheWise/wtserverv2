@@ -233,17 +233,38 @@ export async function storeVideo(
   format: string = 'mp4',
   audioData?: Buffer
 ): Promise<string> {
-  // console.log(`💾 Storing video for job ${jobId}: ${videoData.length} bytes`);
-  // console.log(`💾 Video first 20 bytes: ${videoData.slice(0, 20).toString('hex')}`);
-  // console.log(`💾 Video is MP4: ${videoData.slice(4, 8).toString() === 'ftyp'}`);
+  try {
+    console.log(`[storeVideo] Starting: jobId=${jobId}, wallet=${walletAddress}, format=${format}, duration=${durationSec}`);
 
-  const result = await pool.query(
-    `INSERT INTO videos (job_id, wallet_address, video_data, duration_sec, format, audio_data) 
-     VALUES ($1, $2, $3, $4, $5, $6) 
-     RETURNING video_id`,
-    [jobId, walletAddress, videoData, durationSec, format, audioData || null]
-  );
-  return result.rows[0].video_id;
+    // Store metadata only in videos table
+    // Binary data is stored in video_jobs.video_buffer
+    console.log(`[storeVideo] Executing INSERT into videos table...`);
+    const result = await pool.query(
+      `INSERT INTO videos (job_id, wallet_address, duration_sec, format) 
+       VALUES ($1, $2, $3, $4) 
+       RETURNING video_id`,
+      [jobId, walletAddress, durationSec, format]
+    );
+
+    console.log(`[storeVideo] INSERT succeeded, video_id: ${result.rows[0].video_id}`);
+
+    // Also store the video buffer in video_jobs for streaming
+    console.log(`[storeVideo] Executing UPDATE on video_jobs...`);
+    await pool.query(
+      `UPDATE video_jobs 
+       SET video_buffer = $1, video_size = $2, buffer_downloaded_at = NOW()
+       WHERE job_id = $3`,
+      [videoData, videoData.length, jobId]
+    );
+
+    console.log(`[storeVideo] UPDATE succeeded`);
+    return result.rows[0].video_id;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[storeVideo] ERROR: ${errorMsg}`);
+    console.error(`[storeVideo] Full stack:`, err);
+    throw err;
+  }
 }
 
 // Audio-only storage
@@ -254,12 +275,23 @@ export async function storeAudio(
   durationSec?: number,
   format: string = 'mp3'
 ): Promise<string> {
+  // Store metadata only in videos table
+  // Binary data is stored in video_jobs.video_buffer
   const result = await pool.query(
-    `INSERT INTO videos (job_id, wallet_address, audio_data, duration_sec, format) 
-     VALUES ($1, $2, $3, $4, $5) 
+    `INSERT INTO videos (job_id, wallet_address, duration_sec, format) 
+     VALUES ($1, $2, $3, $4) 
      RETURNING video_id`,
-    [jobId, walletAddress, audioData, durationSec, format]
+    [jobId, walletAddress, durationSec, format]
   );
+
+  // Also store the audio buffer in video_jobs for streaming
+  await pool.query(
+    `UPDATE video_jobs 
+     SET video_buffer = $1, video_size = $2, buffer_downloaded_at = NOW()
+     WHERE job_id = $3`,
+    [audioData, audioData.length, jobId]
+  );
+
   return result.rows[0].video_id;
 }
 
@@ -270,29 +302,40 @@ export async function getVideo(jobId: string): Promise<{
   format: string;
   created_at: Date;
 } | null> {
+  // Get metadata from videos table and buffer from video_jobs
   const result = await pool.query(
-    `SELECT video_id, video_data, duration_sec, format, created_at 
-     FROM videos 
-     WHERE job_id = $1`,
+    `SELECT v.video_id, v.duration_sec, v.format, v.created_at, j.video_buffer 
+     FROM videos v
+     LEFT JOIN video_jobs j ON v.job_id = j.job_id
+     WHERE v.job_id = $1`,
     [jobId]
   );
-  return result.rows[0] || null;
+  if (!result.rows[0]) return null;
+  return {
+    video_id: result.rows[0].video_id,
+    video_data: result.rows[0].video_buffer,
+    duration_sec: result.rows[0].duration_sec,
+    format: result.rows[0].format,
+    created_at: result.rows[0].created_at
+  };
 }
 
 export async function getVideoByJobId(jobId: string): Promise<Buffer | null> {
   const result = await pool.query(
-    'SELECT video_data FROM videos WHERE job_id = $1',
+    'SELECT video_buffer FROM video_jobs WHERE job_id = $1',
     [jobId]
   );
-  return result.rows[0]?.video_data || null;
+  return result.rows[0]?.video_buffer || null;
 }
 
 export async function getVideoByVideoId(videoId: string): Promise<Buffer | null> {
   const result = await pool.query(
-    'SELECT video_data FROM videos WHERE video_id = $1',
+    `SELECT j.video_buffer FROM videos v
+     LEFT JOIN video_jobs j ON v.job_id = j.job_id
+     WHERE v.video_id = $1`,
     [videoId]
   );
-  const buffer = result.rows[0]?.video_data || null;
+  const buffer = result.rows[0]?.video_buffer || null;
   if (buffer) {
     // console.log(`🗄️ Retrieved video ${videoId} from DB: ${buffer.length} bytes`);
     // console.log(`🗄️ DB buffer first 20 bytes: ${buffer.slice(0, 20).toString('hex')}`);
@@ -341,13 +384,14 @@ export async function getContentByWallet(walletAddress: string): Promise<Array<{
        v.created_at,
        j.title,
        CASE 
-         WHEN v.video_data IS NOT NULL THEN 'video'
-         ELSE 'audio'
+         WHEN v.format IN ('mp3', 'wav', 'm4a', 'aac') THEN 'audio'
+         ELSE 'video'
        END as content_type
      FROM videos v
      LEFT JOIN video_jobs j ON v.job_id = j.job_id
      WHERE v.wallet_address = $1 
-     ORDER BY v.created_at DESC`,
+     ORDER BY v.created_at DESC
+     LIMIT 100`,
     [walletAddress]
   );
   return result.rows;
@@ -394,18 +438,20 @@ export async function getTotalFailedJobs(): Promise<number> {
 // Audio retrieval
 export async function getAudioByJobId(jobId: string): Promise<Buffer | null> {
   const result = await pool.query(
-    'SELECT audio_data FROM videos WHERE job_id = $1',
+    'SELECT video_buffer FROM video_jobs WHERE job_id = $1',
     [jobId]
   );
-  return result.rows[0]?.audio_data || null;
+  return result.rows[0]?.video_buffer || null;
 }
 
 export async function getAudioByAudioId(audioId: string): Promise<Buffer | null> {
   const result = await pool.query(
-    'SELECT audio_data FROM videos WHERE video_id = $1',
+    `SELECT j.video_buffer FROM videos v
+     LEFT JOIN video_jobs j ON v.job_id = j.job_id
+     WHERE v.video_id = $1`,
     [audioId]
   );
-  return result.rows[0]?.audio_data || null;
+  return result.rows[0]?.video_buffer || null;
 }
 
 // Cleanup old jobs
@@ -558,4 +604,153 @@ export async function saveScrollVideo(
   );
 
   return result.rows[0].video_id;
+}
+
+// ===== SORA POLLING FUNCTIONS =====
+
+/**
+ * Register a Sora job for server-driven polling
+ */
+export async function registerSoraJobForPolling(
+  jobId: string,
+  soraJobId: string,
+  webhookUrl?: string
+): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE video_jobs
+       SET sora_job_id = $1,
+           sora_status = 'queued',
+           webhook_url = $2,
+           updated_at = NOW()
+       WHERE job_id = $3`,
+      [soraJobId, webhookUrl || null, jobId]
+    );
+  } catch (error: any) {
+    // If columns don't exist, this is a non-Sora job, silently continue
+    if (String(error?.message || '').includes('sora')) {
+      console.error('Error registering Sora job:', error);
+    }
+  }
+}
+
+/**
+ * Update Sora job status and progress
+ */
+export async function updateSoraJobStatus(
+  jobId: string,
+  soraStatus: string,
+  progress: number = 0
+): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE video_jobs
+       SET sora_status = $1,
+           sora_progress = $2,
+           last_sora_check = NOW(),
+           updated_at = NOW()
+       WHERE job_id = $3`,
+      [soraStatus, progress, jobId]
+    );
+  } catch (error) {
+    console.error('Error updating Sora job status:', error);
+  }
+}
+
+/**
+ * Get all pending Sora jobs
+ */
+export async function getPendingSoraJobs(): Promise<any[]> {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        job_id,
+        sora_job_id,
+        wallet_address,
+        webhook_url,
+        sora_status,
+        sora_progress,
+        created_at,
+        last_sora_check
+       FROM video_jobs
+       WHERE sora_job_id IS NOT NULL
+         AND sora_status NOT IN ('completed', 'failed')
+         AND created_at > NOW() - INTERVAL '24 hours'
+       ORDER BY last_sora_check ASC NULLS FIRST
+       LIMIT 100`
+    );
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching pending Sora jobs:', error);
+    return [];
+  }
+}
+
+/**
+ * Get Sora polling statistics
+ */
+export async function getSoraPollingStats(): Promise<{
+  total_jobs: number;
+  queued_jobs: number;
+  processing_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+} | null> {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        COUNT(*) as total_jobs,
+        COUNT(CASE WHEN sora_status = 'queued' THEN 1 END) as queued_jobs,
+        COUNT(CASE WHEN sora_status IN ('processing', 'in_progress') THEN 1 END) as processing_jobs,
+        COUNT(CASE WHEN sora_status = 'completed' THEN 1 END) as completed_jobs,
+        COUNT(CASE WHEN sora_status = 'failed' THEN 1 END) as failed_jobs
+       FROM video_jobs
+       WHERE sora_job_id IS NOT NULL`
+    );
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('Error getting polling stats:', error);
+    return null;
+  }
+}
+
+/**
+ * Save video buffer to database
+ */
+export async function saveVideoBuffer(
+  jobId: string,
+  videoBuffer: Buffer,
+  videoSize: number
+): Promise<boolean> {
+  try {
+    await pool.query(
+      `UPDATE video_jobs 
+       SET video_buffer = $1, 
+           video_size = $2, 
+           buffer_downloaded_at = NOW()
+       WHERE job_id = $3`,
+      [videoBuffer, videoSize, jobId]
+    );
+    return true;
+  } catch (error) {
+    console.error(`Error saving video buffer for job ${jobId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Get video buffer from database
+ */
+export async function getVideoBuffer(jobId: string): Promise<Buffer | null> {
+  try {
+    const result = await pool.query(
+      `SELECT video_buffer FROM video_jobs WHERE id = $1 AND video_buffer IS NOT NULL`,
+      [jobId]
+    );
+    if (result.rows.length === 0) return null;
+    return result.rows[0].video_buffer;
+  } catch (error) {
+    console.error(`Error retrieving video buffer for job ${jobId}:`, error);
+    return null;
+  }
 }

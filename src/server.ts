@@ -3,17 +3,18 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import crypto from 'crypto';
-import { WebSocketServer } from 'ws';
 import http from 'http';
+import { WebSocketServer } from 'ws';
 import videosStatusRoute from './weaveit-generator/videosStatusRoute.js';
 import generateRoute from './weaveit-generator/generateRoute.js';
 import generateAudioRoute from './weaveit-generator/generateAudioRoute.js';
 import generateNarrativeRoute from './weaveit-generator/generateNarrativeRoute.js';
 import generateAnimationRoute from './weaveit-generator/generateAnimationRoute.js';
-import pool, { testConnection, getVideoByJobId, getVideoByVideoId, getVideosByWallet, getAudioByJobId, getAudioByAudioId, getContentByWallet, getUserInfo, getCompletedJobsCount, getTotalDurationSecondsForWallet, getTotalUsersCount, getTotalVideosCreated, getTotalFailedJobs, updateJobStatus, storeVideo, ensureUser } from './db.js';
+import pool, { testConnection, getVideoByJobId, getVideoByVideoId, getVideosByWallet, getAudioByJobId, getAudioByAudioId, getContentByWallet, getUserInfo, getCompletedJobsCount, getTotalDurationSecondsForWallet, getTotalUsersCount, getTotalVideosCreated, getTotalFailedJobs, updateJobStatus, storeVideo, ensureUser, getVideoBuffer } from './db.js';
 import paymentsRoute from './paymentsRoute.js';
 import usersRoute from './usersRoute.js';
-import { wsManager } from './websocket.js';
+import { startSoraPolling, stopSoraPolling, setWebSocketManager } from './soraPollingService.js';
+import { webSocketManager } from './websocket.js';
 
 // Load environment variables from root .env file
 dotenv.config({ path: path.join(process.cwd(), '.env') });
@@ -22,15 +23,21 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 
-// WebSocket server
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws, request) => {
-  wsManager.handleConnection(ws, request);
-});
-
 app.use(cors());
 app.use(express.json());
+
+// Setup WebSocket server for real-time job updates
+const wss = new WebSocketServer({ server });
+wss.on('connection', (ws, request) => {
+  webSocketManager.handleConnection(ws, request);
+});
+
+console.log('✅ WebSocket server initialized');
+
+// Serve retrieve.html at root or /retrieve endpoint
+app.get('/retrieve', (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'src', 'retrieve.html'));
+});
 
 // Mount API routers under `/api` so frontend can call `/api/generate` and `/api/videos/status/:id`
 app.use('/api', videosStatusRoute);
@@ -92,6 +99,168 @@ app.get('/api/videos/:videoId', async (req, res) => {
   } catch (err) {
     console.error('Error serving video:', err);
     res.status(500).json({ error: 'Failed to retrieve video' });
+  }
+});
+
+// Download Sora video from database by job ID
+app.get('/api/sora/videos/:jobId/download', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+
+    const videoBuffer = await getVideoBuffer(jobId);
+
+    if (!videoBuffer) {
+      res.status(404).json({ error: 'Video not found in database. It may still be downloading.' });
+      return;
+    }
+
+    console.log(`🎬 Serving Sora video from database: ${jobId} (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Set proper headers for video streaming
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Length', videoBuffer.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('Content-Disposition', `attachment; filename="video-${jobId.slice(0, 8)}.mp4"`);
+    res.send(videoBuffer);
+  } catch (err) {
+    console.error('Error serving Sora video:', err);
+    res.status(500).json({ error: 'Failed to retrieve video' });
+  }
+});
+
+// Get single video from OpenAI API
+app.get('/api/openai/videos/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const apiKey = process.env.OPENAI_API_KEY;
+
+    console.log(`📹 Fetching video ${videoId} from OpenAI API`);
+
+    if (!apiKey) {
+      console.error('OPENAI_API_KEY not configured');
+      res.status(500).json({ error: 'OPENAI_API_KEY not configured on server' });
+      return;
+    }
+
+    const response = await fetch(`https://api.openai.com/v1/videos/${videoId}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      }
+    });
+
+    console.log(`OpenAI API response status: ${response.status}`);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('OpenAI API error:', error);
+      res.status(response.status).json({ error: error.error?.message || 'Failed to fetch video' });
+      return;
+    }
+
+    const video = await response.json();
+    console.log(`✅ Successfully fetched video ${videoId}`);
+    res.json(video);
+  } catch (err) {
+    console.error('Error fetching video from OpenAI:', err);
+    res.status(500).json({ error: 'Failed to fetch video from OpenAI: ' + (err as Error).message });
+  }
+});
+
+// Get all videos from OpenAI API
+app.get('/api/openai/videos', async (req, res) => {
+  try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    const { limit = 50, order = 'desc' } = req.query;
+
+    console.log(`📺 Fetching videos from OpenAI API (limit: ${limit}, order: ${order})`);
+
+    if (!apiKey) {
+      console.error('OPENAI_API_KEY not configured');
+      res.status(500).json({ error: 'OPENAI_API_KEY not configured on server' });
+      return;
+    }
+
+    const url = new URL('https://api.openai.com/v1/videos');
+    url.searchParams.append('limit', limit as string);
+    url.searchParams.append('order', order as string);
+
+    const response = await fetch(url.toString(), {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      }
+    });
+
+    console.log(`OpenAI API response status: ${response.status}`);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('OpenAI API error:', error);
+      res.status(response.status).json({ error: error.error?.message || 'Failed to fetch videos' });
+      return;
+    }
+
+    const data = await response.json();
+    console.log(`✅ Successfully fetched ${data.data?.length || 0} videos`);
+    res.json(data);
+  } catch (err) {
+    console.error('Error fetching videos from OpenAI:', err);
+    res.status(500).json({ error: 'Failed to fetch videos from OpenAI: ' + (err as Error).message });
+  }
+});
+
+// Download video from OpenAI API and serve it
+app.get('/api/openai/videos/:videoId/download', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const apiKey = process.env.OPENAI_API_KEY;
+
+    if (!apiKey) {
+      res.status(500).json({ error: 'OPENAI_API_KEY not configured on server' });
+      return;
+    }
+
+    console.log(`📥 Downloading video content from OpenAI: ${videoId}`);
+
+    // Use the /content endpoint to download the actual video bytes
+    const contentResponse = await fetch(`https://api.openai.com/v1/videos/${videoId}/content`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      }
+    });
+
+    if (!contentResponse.ok) {
+      const errorText = await contentResponse.text();
+      console.error(`OpenAI content error (${contentResponse.status}):`, errorText);
+
+      // Try to parse as JSON for better error message
+      try {
+        const error = JSON.parse(errorText);
+        res.status(contentResponse.status).json({
+          error: error.error?.message || `Failed to download video (${contentResponse.status})`
+        });
+      } catch {
+        res.status(contentResponse.status).json({
+          error: `Failed to download video from OpenAI (${contentResponse.status}): ${errorText}`
+        });
+      }
+      return;
+    }
+
+    const videoBuffer = Buffer.from(await contentResponse.arrayBuffer());
+
+    console.log(`✅ Successfully downloaded video ${videoId} (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Stream the video to the client
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Length', videoBuffer.length);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    res.setHeader('Content-Disposition', `attachment; filename="sora-video-${videoId.slice(0, 8)}.mp4"`);
+    res.send(videoBuffer);
+  } catch (err) {
+    console.error('Error downloading video from OpenAI:', err);
+    res.status(500).json({ error: 'Failed to download video from OpenAI: ' + (err as Error).message });
   }
 });
 
@@ -306,7 +475,69 @@ app.post('/api/webhooks/job-update', async (req, res) => {
 
     console.log(`🔗 Webhook received for job ${jobId}: ${status}${progress ? ` (${progress}%)` : ''}`);
 
-    // Only update database status for final states
+    // Check if this is a Sora v3 job by looking for sora_job_id
+    const jobResult = await pool.query(
+      'SELECT sora_job_id FROM video_jobs WHERE job_id = $1',
+      [jobId]
+    );
+    const isSoraJob = jobResult.rows.length > 0 && jobResult.rows[0].sora_job_id;
+
+    // Handle Sora v3 video completion
+    // The soraPollingService has already downloaded and stored to video_jobs.video_buffer
+    // We need to move it to the videos table
+    if (isSoraJob && status === 'completed') {
+      console.log(`📥 Processing Sora video for job ${jobId}`);
+      try {
+        // Get wallet and video buffer from video_jobs
+        const result = await pool.query(
+          'SELECT wallet_address, video_buffer, video_size FROM video_jobs WHERE job_id = $1',
+          [jobId]
+        );
+
+        if (result.rows.length > 0) {
+          const { wallet_address: walletAddress, video_buffer: videoBuffer, video_size: videoSize } = result.rows[0];
+
+          // Only store if we have a video buffer
+          if (videoBuffer && videoBuffer.length > 0) {
+            console.log(`[webhook] Calling storeVideo with jobId=${jobId}, wallet=${walletAddress}, bufferSize=${videoSize}`);
+
+            try {
+              // Store video in database and get the video_id
+              const dbVideoId = await storeVideo(jobId, walletAddress, videoBuffer, parseInt(duration?.toString() || '0'));
+              console.log(`✅ Sora video saved to database for job ${jobId} with video_id: ${dbVideoId} (${(videoSize / 1024 / 1024).toFixed(2)} MB)`);
+
+              // Broadcast completion with the database video ID so frontend can fetch it
+              webSocketManager.emitCompleted(jobId, dbVideoId, parseInt(duration?.toString() || '0'));
+            } catch (storeErr) {
+              const errorMsg = storeErr instanceof Error ? storeErr.message : String(storeErr);
+              console.error(`[webhook] storeVideo failed for job ${jobId}:`, errorMsg);
+              console.error(`[webhook] Full error:`, storeErr);
+              webSocketManager.emitError(jobId, `Failed to store video: ${errorMsg}`);
+            }
+          } else {
+            console.warn(`⚠️  No video buffer found for job ${jobId}`);
+            webSocketManager.emitError(jobId, 'Video not found in buffer');
+          }
+        } else {
+          console.warn(`⚠️  Job ${jobId} not found in video_jobs`);
+          webSocketManager.emitError(jobId, 'Job not found');
+        }
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`❌ Failed to process Sora video:`, errorMsg);
+        console.error(`❌ Full error:`, err);
+        // Broadcast error to WebSocket
+        webSocketManager.emitError(jobId, 'Failed to process video');
+        // Don't fail the webhook - continue with status update
+      }
+    } else if (!isSoraJob && status === 'completed' && videoId) {
+      // For v1/v2 jobs, the videoId is already the database video ID
+      // Just broadcast completion with the videoId
+      console.log(`✅ V1/V2 job ${jobId} completed (videoId: ${videoId})`);
+      webSocketManager.emitCompleted(jobId, videoId, parseInt(duration?.toString() || '0'));
+    }
+
+    // Update database status for final states
     if (status === 'completed' || status === 'failed') {
       await updateJobStatus(jobId, status, error || undefined);
     }
@@ -468,7 +699,34 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`WebSocket server available at ws://localhost:${PORT}`);
+  console.log(`Poll job status at /api/videos/status/:jobId`);
+
+  // Start Sora polling service for server-driven webhooks
+  try {
+    setWebSocketManager(webSocketManager);
+    await startSoraPolling();
+  } catch (error) {
+    console.error('Failed to start Sora polling service:', error);
+  }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully...');
+  await stopSoraPolling();
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully...');
+  await stopSoraPolling();
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });

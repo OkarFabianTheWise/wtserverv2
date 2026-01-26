@@ -3,7 +3,6 @@ import crypto from 'crypto';
 import { enhanceScript, generateTitle } from '../codeAnalyzer.js';
 import { generateSpeechBuffer } from '../textToSpeech.js';
 import { createVideoJob, updateJobStatus, storeAudio, deductUserPoints } from '../db.js';
-import { wsManager } from '../websocket.js';
 const router = express.Router();
 // Environment variables
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-webhook-secret';
@@ -55,36 +54,27 @@ async function sendWebhook(jobId, status, audioId, duration, error) {
 async function processAudioGeneration(jobId, walletAddress, script, explanation) {
     try {
         // console.log(`🚀 Starting background processing for audio job ${jobId}`);
-        // Emit initial progress
-        wsManager.emitProgress(jobId, 0, 'generating', 'Starting audio generation...');
         // Generate speech buffer (no file saving)
-        wsManager.emitProgress(jobId, 2, 'generating', 'Initializing audio generation...');
-        wsManager.emitProgress(jobId, 5, 'generating', 'Generating audio narration...');
         const audioBuffer = await generateSpeechBuffer(explanation);
         // console.log(`Generated audio: ${audioBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 20, 'generating', 'Audio narration completed');
         // Calculate duration from audio buffer (in seconds)
         const durationSec = estimateAudioDuration(audioBuffer);
         // console.log(`Estimated duration: ${durationSec} seconds`);
-        wsManager.emitProgress(jobId, 25, 'generating', 'Calculating audio duration...');
         // Store audio in database
         const audioId = await storeAudio(jobId, walletAddress, audioBuffer, durationSec);
         // console.log('Stored audio in database:', audioId);
-        wsManager.emitProgress(jobId, 30, 'generating', 'Storing audio in database...');
         // Update job status to completed
         await updateJobStatus(jobId, 'completed');
         // Send webhook
         await sendWebhook(jobId, 'completed', audioId, durationSec);
-        // Emit completion
-        wsManager.emitCompleted(jobId, audioId, durationSec);
     }
     catch (error) {
         if (VERBOSE_LOGGING)
             console.error(`❌ Background processing error for audio job ${jobId}:`, error);
         // Send webhook
         await sendWebhook(jobId, 'failed', undefined, undefined, String(error));
-        // Emit error
-        wsManager.emitError(jobId, String(error));
+        // Update job status to failed
+        await updateJobStatus(jobId, 'failed', String(error)).catch(console.error);
     }
 }
 // POST /api/generate/audio

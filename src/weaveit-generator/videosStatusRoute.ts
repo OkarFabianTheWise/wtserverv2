@@ -1,6 +1,7 @@
 import express from 'express';
 // import type { Request, Response } from 'express';
 import { getJobStatus, getVideo } from '../db.js';
+import pool from '../db.js';
 
 const router = express.Router();
 
@@ -15,14 +16,24 @@ router.get<{ id: string }>('/videos/status/:id', async (req, res) => {
 
     // Check job status in database
     const jobStatus = await getJobStatus(id);
-    
+
     if (!jobStatus) {
       res.status(404).json({ error: 'Job not found' });
       return;
     }
 
-    // Check if video exists
+    // Check if video exists and get video ID
     const video = await getVideo(id);
+    let videoId: string | null = null;
+
+    if (video) {
+      // Query the videos table to get the video_id
+      const videoResult = await pool.query(
+        'SELECT video_id FROM videos WHERE job_id = $1',
+        [id]
+      );
+      videoId = videoResult.rows[0]?.video_id || null;
+    }
 
     res.json({
       jobId: id,
@@ -32,6 +43,8 @@ router.get<{ id: string }>('/videos/status/:id', async (req, res) => {
       createdAt: jobStatus.created_at,
       updatedAt: jobStatus.updated_at,
       videoAvailable: !!video,
+      videoId: videoId,
+      progress: jobStatus.status === 'completed' ? 100 : 50, // Simple progress indicator
     });
   } catch (err) {
     console.error('weaveit-generator: Error in /api/videos/status/:id:', err);

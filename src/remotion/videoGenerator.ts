@@ -517,14 +517,30 @@ export async function downloadSoraVideo(
     const finalVideoPath = audioBuffer ? path.join(tempDir, `${tempId}_final.mp4`) : videoPath;
 
     try {
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY || '',
-        });
+        const openaiApiKey = process.env.OPENAI_API_KEY || '';
+        if (!openaiApiKey) {
+            throw new Error('OPENAI_API_KEY environment variable is not set');
+        }
 
         console.log('📥 Downloading Sora video...');
-        const content = await (openai as any).videos.downloadContent(videoId, 'video' as any);
-        const videoBuffer = Buffer.from(await content.arrayBuffer());
+        console.log(`   Video ID: ${videoId}`);
 
+        // Use HTTP API to download the file directly
+        // OpenAI Files API: GET /v1/files/{file_id}/content
+        const fileUrl = `https://api.openai.com/v1/files/${videoId}/content`;
+
+        const response = await fetch(fileUrl, {
+            headers: {
+                'Authorization': `Bearer ${openaiApiKey}`
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`OpenAI API returned ${response.status}: ${response.statusText}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const videoBuffer = Buffer.from(arrayBuffer);
         console.log(`✅ Downloaded video: ${videoBuffer.length} bytes`);
 
         // Write video to temp file

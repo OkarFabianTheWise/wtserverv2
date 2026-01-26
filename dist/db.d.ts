@@ -60,4 +60,34 @@ export declare function deductUserPoints(walletAddress: string, points: number):
 export declare function saveScrollImage(jobId: string, imageBuffer: Buffer): Promise<string>;
 export declare function getScrollImageByJobId(jobId: string): Promise<Buffer | null>;
 export declare function saveScrollVideo(jobId: string, videoBuffer: Buffer): Promise<string>;
+/**
+ * Register a Sora job for server-driven polling
+ */
+export declare function registerSoraJobForPolling(jobId: string, soraJobId: string, webhookUrl?: string): Promise<void>;
+/**
+ * Update Sora job status and progress
+ */
+export declare function updateSoraJobStatus(jobId: string, soraStatus: string, progress?: number): Promise<void>;
+/**
+ * Get all pending Sora jobs
+ */
+export declare function getPendingSoraJobs(): Promise<any[]>;
+/**
+ * Get Sora polling statistics
+ */
+export declare function getSoraPollingStats(): Promise<{
+    total_jobs: number;
+    queued_jobs: number;
+    processing_jobs: number;
+    completed_jobs: number;
+    failed_jobs: number;
+} | null>;
+/**
+ * Save video buffer to database
+ */
+export declare function saveVideoBuffer(jobId: string, videoBuffer: Buffer, videoSize: number): Promise<boolean>;
+/**
+ * Get video buffer from database
+ */
+export declare function getVideoBuffer(jobId: string): Promise<Buffer | null>;
 //# sourceMappingURL=db.d.ts.map

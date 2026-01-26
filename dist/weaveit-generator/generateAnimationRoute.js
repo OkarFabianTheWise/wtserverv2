@@ -2,7 +2,6 @@ import express from 'express';
 import crypto from 'crypto';
 import { generateIllustrationVideoWithRemotion } from '../remotionVideoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
-import { wsManager } from '../websocket.js';
 import { generateSpeechBuffer } from '../textToSpeech.js';
 import OpenAI from 'openai';
 import { generateAnimationScript } from '../animationScriptGenerator.js';
@@ -78,43 +77,33 @@ async function sendWebhook(jobId, status, videoId, duration, error) {
 async function processAnimationGeneration(jobId, walletAddress, script) {
     try {
         // console.log(`🚀 Starting background processing for animation job ${jobId}`);
-        // Emit initial progress
-        wsManager.emitProgress(jobId, 0, 'generating', 'Starting animation generation...');
         // Generate animation script
-        wsManager.emitProgress(jobId, 8, 'generating', 'Generating animation script...');
         const animationScript = await generateAnimationScriptForCode(script);
         // console.log(`Generated animation script:`, animationScript);
-        wsManager.emitProgress(jobId, 10, 'generating', 'Animation script generated');
         // Generate voice over audio
-        wsManager.emitProgress(jobId, 15, 'generating', 'Generating voice over...');
         const audioBuffer = await generateSpeechBuffer(animationScript.voiceover.text);
         // console.log(`Generated voice over audio: ${audioBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 40, 'generating', 'Voice over generated');
         // Generate animation video with Remotion
-        wsManager.emitProgress(jobId, 50, 'generating', 'Generating animation video...');
         const videoBuffer = await generateIllustrationVideoWithRemotion(script, audioBuffer);
         // console.log(`Generated animation video: ${videoBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 90, 'generating', 'Animation video generated');
         // Calculate duration in seconds
         const durationSec = Math.round(animationScript.totalDuration / 1000);
         // Store video in database
         const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
         // console.log('Stored animation video with voice over in database:', videoId);
-        wsManager.emitProgress(jobId, 95, 'generating', 'Storing video in database...');
         // Update job status to completed
         await updateJobStatus(jobId, 'completed');
         // Send webhook
         await sendWebhook(jobId, 'completed', videoId, durationSec);
-        // Emit completion
-        wsManager.emitCompleted(jobId, videoId, durationSec);
+        // Update job to completed (redundant but explicit)
     }
     catch (error) {
         if (VERBOSE_LOGGING)
             console.error(`❌ Background processing error for animation job ${jobId}:`, error);
         // Send webhook
         await sendWebhook(jobId, 'failed', undefined, undefined, String(error));
-        // Emit error
-        wsManager.emitError(jobId, String(error));
+        // Update job status to failed
+        await updateJobStatus(jobId, 'failed', String(error)).catch(console.error);
     }
 }
 // POST /api/generate/animation

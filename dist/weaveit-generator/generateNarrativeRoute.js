@@ -5,7 +5,6 @@ import { generateSpeechBuffer } from '../textToSpeech.js';
 import { processCodeWithOpenAI } from '../remotion/openaiProcessor.js';
 import { renderAnimationScriptToVideo } from '../remotion/videoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
-import { wsManager } from '../websocket.js';
 const router = express.Router();
 // Environment variables
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-webhook-secret';
@@ -58,18 +57,13 @@ async function sendWebhook(jobId, status, videoId, duration, sceneCount, error) 
 async function processNarrativeGeneration(jobId, walletAddress, script) {
     try {
         // console.log(`🚀 Starting background processing for narrative job ${jobId}`);
-        // Emit initial progress
-        wsManager.emitProgress(jobId, 0, 'generating', 'Starting narrative generation...');
         // Generate narrative storyboard
         // console.log('📖 Generating narrative storyboard...');
-        wsManager.emitProgress(jobId, 2, 'generating', 'Analyzing script for narrative...');
-        wsManager.emitProgress(jobId, 5, 'generating', 'Creating narrative storyboard...');
         const scenes = await generateNarrativeStoryboard(script);
         if (!scenes || scenes.length === 0) {
             throw new Error('Failed to generate narrative scenes');
         }
         // console.log(`✅ Generated ${scenes.length} narrative scenes`);
-        wsManager.emitProgress(jobId, 10, 'generating', `Generated ${scenes.length} narrative scenes`);
         // Calculate total narration duration from scenes
         const totalSceneDuration = scenes.reduce((sum, scene) => sum + (scene.duration || 3), 0);
         // console.log(`📊 Total scene duration: ${totalSceneDuration}s`);
@@ -77,44 +71,33 @@ async function processNarrativeGeneration(jobId, walletAddress, script) {
         const narrationText = scenes.map((s) => s.narration).join(' ');
         // Generate speech from combined narration
         // console.log('🎙️  Generating audio narration...');
-        wsManager.emitProgress(jobId, 15, 'generating', 'Preparing audio generation...');
-        wsManager.emitProgress(jobId, 20, 'generating', 'Generating audio narration...');
         const audioBuffer = await generateSpeechBuffer(narrationText);
         // console.log(`Generated audio: ${audioBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 30, 'generating', 'Audio narration completed');
         // Process narration with OpenAI (no re-processing, just once)
         // console.log('🤖 Processing narration with OpenAI...');
-        wsManager.emitProgress(jobId, 35, 'generating', 'Processing narration...');
         const animationScript = await processCodeWithOpenAI(narrationText);
-        wsManager.emitProgress(jobId, 50, 'generating', 'Animation script ready');
         // Render animation to video using pre-processed script
         // console.log('🎨 Rendering narrative animation video...');
-        wsManager.emitProgress(jobId, 55, 'generating', 'Rendering animation...');
         const videoBuffer = await renderAnimationScriptToVideo(animationScript, audioBuffer);
         // console.log(`Generated narrative video: ${videoBuffer.length} bytes`);
-        wsManager.emitProgress(jobId, 75, 'generating', 'Video rendering completed');
         // Calculate duration from audio buffer
         const durationSec = estimateAudioDuration(audioBuffer);
         // console.log(`⏱️  Estimated duration: ${durationSec} seconds`);
-        wsManager.emitProgress(jobId, 65, 'generating', 'Calculating video duration...');
         // Store video in database
         const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
         // console.log('Stored narrative video in database:', videoId);
-        wsManager.emitProgress(jobId, 70, 'generating', 'Storing video in database...');
         // Update job status to completed
         await updateJobStatus(jobId, 'completed');
         // Send webhook
         await sendWebhook(jobId, 'completed', videoId, durationSec, scenes.length);
-        // Emit completion
-        wsManager.emitCompleted(jobId, videoId, durationSec);
     }
     catch (error) {
         if (VERBOSE_LOGGING)
             console.error(`❌ Background processing error for narrative job ${jobId}:`, error);
         // Send webhook
         await sendWebhook(jobId, 'failed', undefined, undefined, undefined, String(error));
-        // Emit error
-        wsManager.emitError(jobId, String(error));
+        // Update job status to failed
+        await updateJobStatus(jobId, 'failed', String(error)).catch(console.error);
     }
 }
 // POST /api/generate/narrative

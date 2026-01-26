@@ -13,5 +13,6 @@ declare class WebSocketManager {
     emitError(jobId: string, error: string): void;
 }
 export declare const wsManager: WebSocketManager;
+export declare const webSocketManager: WebSocketManager;
 export {};
 //# sourceMappingURL=websocket.d.ts.map

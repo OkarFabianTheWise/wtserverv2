@@ -7,7 +7,8 @@ import { setupRemotionV2 } from '../remotion/openaiProcessor.js';
 import { renderAnimationScriptToVideo } from '../remotion/videoGenerator.js';
 import { generateVideoWithSora } from '../remotion/videoGenerator.js';
 import { createVideoJob, updateJobStatus, storeVideo, deductUserPoints } from '../db.js';
-import { wsManager } from '../websocket.js';
+import pool from '../db.js';
+import { registerSoraJob } from '../soraPollingService.js';
 const router = express.Router();
 // Environment variables
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'default-webhook-secret';
@@ -59,39 +60,30 @@ async function sendWebhook(jobId, status, videoId, duration, error) {
 async function processVideoGeneration(jobId, walletAddress, script, voiceoverText, renderVersion = 'v2', animationScriptData) {
     try {
         // if (VERBOSE_LOGGING) console.log(`🚀 Starting background processing for job ${jobId} using ${renderVersion}`);
-        // Emit initial progress
-        wsManager.emitProgress(jobId, 0, 'generating', 'Generating...');
         let videoBuffer;
         let durationSec;
         let audioBuffer;
         if (renderVersion === 'v3') {
             // ===== SORA V3 GENERATION =====
-            wsManager.emitProgress(jobId, 5, 'generating', 'Sora API: Creating video job...');
             // Generate Sora video (already includes native audio)
             const soraJobId = await generateVideoWithSora(voiceoverText);
-            wsManager.emitProgress(jobId, 50, 'generating', 'Sora API: Waiting for video...');
-            // Note: In production, you'd use webhooks to get notified when Sora completes
-            // For now, this returns immediately with soraJobId
-            // The actual video download happens via another endpoint
-            // Since Sora is async, we'll emit a queued status and let webhook handle completion
-            wsManager.emitProgress(jobId, 100, 'queued', 'Video queued with Sora API');
-            await sendWebhook(jobId, 'queued', undefined, undefined);
+            // Register for server-driven polling
+            // Server will poll Sora API and send webhook updates to client
+            const webhookUrl = process.env.WEBHOOK_URL || 'http://localhost:3001/api/webhooks/job-update';
+            await registerSoraJob(jobId, soraJobId, webhookUrl);
+            // Update status to pending (waiting for Sora API)
+            await updateJobStatus(jobId, 'pending');
             return;
         }
         else {
             // ===== AUDIO GENERATION PHASE (V1 & V2) =====
             // Generate speech buffer from voiceover text
-            wsManager.emitProgress(jobId, 2, 'generating', 'Generating...');
-            wsManager.emitProgress(jobId, 5, 'generating', 'Generating...');
             audioBuffer = await generateSpeechBuffer(voiceoverText);
             // if (VERBOSE_LOGGING) console.log(`Generated audio: ${audioBuffer.length} bytes`);
-            wsManager.emitProgress(jobId, 15, 'generating', 'Generating...');
             // ===== VIDEO RENDERING PHASE =====
             // Choose rendering engine based on version
             if (renderVersion === 'v2') {
                 // For v2, animationScript is pre-processed in setup phase
-                wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
-                wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
                 if (animationScriptData) {
                     // Use pre-processed AnimationScript from setup phase
                     // This merges the rendered animation with the audio
@@ -101,28 +93,22 @@ async function processVideoGeneration(jobId, walletAddress, script, voiceoverTex
                     // Fallback: shouldn't happen in v2, but keep for safety
                     throw new Error('AnimationScript not provided for v2 rendering');
                 }
-                wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
             }
             else {
                 // v1 rendering
-                wsManager.emitProgress(jobId, 18, 'generating', 'Rendering...');
-                wsManager.emitProgress(jobId, 25, 'generating', 'Rendering...');
                 videoBuffer = await generateScrollingScriptVideoBuffer(script, audioBuffer);
-                wsManager.emitProgress(jobId, 40, 'generating', 'Rendering...');
             }
             // if (VERBOSE_LOGGING) console.log(`Generated video: ${videoBuffer.length} bytes`);
             // ===== VIDEO STORAGE PHASE =====
             // Calculate duration from audio buffer (in seconds)
             durationSec = estimateAudioDuration(audioBuffer);
             // if (VERBOSE_LOGGING) console.log(`Estimated duration: ${durationSec} seconds`);
-            wsManager.emitProgress(jobId, 45, 'generating', 'Storing...');
             // Store video in database
             const videoId = await storeVideo(jobId, walletAddress, videoBuffer, durationSec);
             // if (VERBOSE_LOGGING) console.log('Stored video in database:', videoId);
-            wsManager.emitProgress(jobId, 75, 'generating', 'Storing...');
             await sendWebhook(jobId, 'completed', videoId, durationSec);
-            // Emit completion
-            wsManager.emitCompleted(jobId, videoId, durationSec);
+            // Update job to completed
+            await updateJobStatus(jobId, 'completed');
         }
     }
     catch (error) {
@@ -130,8 +116,8 @@ async function processVideoGeneration(jobId, walletAddress, script, voiceoverTex
             console.error(`❌ Background processing error for job ${jobId}:`, error);
         // Send webhook
         await sendWebhook(jobId, 'failed', undefined, undefined, String(error));
-        // Emit error
-        wsManager.emitError(jobId, String(error));
+        // Update job status to failed
+        await updateJobStatus(jobId, 'failed', String(error)).catch(console.error);
     }
 }
 // POST /api/generate
@@ -234,5 +220,42 @@ const generateHandler = async (req, res) => {
     return;
 };
 router.post('/generate', generateHandler);
+// GET /api/download?jobId=:jobId&renderVersion=v3
+// Download completed v3 Sora video from database
+router.get('/download', async (req, res) => {
+    try {
+        const renderVersion = req.query.renderVersion || 'v2';
+        const jobId = req.query.jobId;
+        // Only v3 uses this endpoint for Sora
+        if (renderVersion !== 'v3') {
+            res.status(400).json({ error: 'Download endpoint is for renderVersion=v3 (Sora videos)' });
+            return;
+        }
+        if (!jobId) {
+            res.status(400).json({ error: 'jobId is required' });
+            return;
+        }
+        console.log(`📥 Downloading v3 video for job ${jobId}`);
+        // Get video from database
+        const result = await pool.query('SELECT video_data FROM videos WHERE job_id = $1', [jobId]);
+        if (result.rows.length === 0 || !result.rows[0].video_data) {
+            res.status(404).json({ error: 'Video not found or still processing' });
+            return;
+        }
+        const videoBuffer = result.rows[0].video_data;
+        console.log(`✅ Streaming v3 video ${jobId} (${(videoBuffer.length / 1024 / 1024).toFixed(2)} MB)`);
+        // Stream video to client
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Content-Length', videoBuffer.length);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        res.setHeader('Content-Disposition', `attachment; filename="sora-video-${jobId.slice(0, 8)}.mp4"`);
+        res.send(videoBuffer);
+    }
+    catch (err) {
+        console.error('Error downloading video:', err);
+        res.status(500).json({ error: 'Failed to download video' });
+    }
+});
 export default router;
 //# sourceMappingURL=generateRoute.js.map
